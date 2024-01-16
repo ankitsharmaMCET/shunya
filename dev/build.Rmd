@@ -1,0 +1,198 @@
+---
+title: "Package development/build tools"
+author: '@ideea'
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, eval=FALSE}
+library(devtools)
+# ?create_tidy_package()
+# create_tidy_package(getwd())
+# devtools::build_readme()
+
+# Run once to configure package to use pkgdown
+# usethis::use_pkgdown()
+
+# Run to build the website
+pkgdown::build_site()
+# usethis::use_pkgdown_github_pages()
+
+# vignettes
+# usethis::use_article("datasets")
+
+```
+
+
+## Import data from GoogleSheets
+```{r}
+library(tidyverse)
+library(googlesheets4)
+library(sf)
+gg <- "https://docs.google.com/spreadsheets/d/1LF6aBkFF0o3tq-9l5OglL8A4eukG_en2pVQS7VKb23c/edit?usp=sharing"
+
+```
+
+### Demand
+```{r}
+dem_sheet <- "demand_scen1"
+dem36 <- googlesheets4::read_sheet(gg, dem_sheet, range = "A2:V38")
+
+gis_sf <- get_ideea_map(nreg = 36, rename = F)
+
+dem36_sf <- left_join(gis_sf, select(dem36, -`name36`), by = "reg36")
+
+ggplot(dem36_sf) +
+  geom_sf(aes(fill = dem_2022_actual / 1e3)) +
+  scale_fill_viridis_c(option = "H", name = "TWh") +
+  theme_bw()
+
+d <- dem36_sf %>%
+  st_drop_geometry() %>%
+  select(-name36, -dem_2022_actual) %>%
+  select(reg36, matches("dem_[0-9]+$")) %>%
+  pivot_longer(
+    cols = matches("dem_[0-9]+$"), 
+    names_prefix = "dem_", 
+    names_transform = as.integer, 
+    names_to = "year", 
+    values_to = "GWh"
+  )
+  # filter(!is.na(year))
+
+ggplot(d) +
+  geom_area(aes(year, GWh/1e6, fill = reg36)) +
+  scale_fill_viridis_d(option = "H") +
+  labs(x = "", y = "TWh") +
+  theme_bw()
+
+elc_demand <- d
+save(elc_demand, file = "data-raw/googlesheets/elc_demand.RData")
+  
+```
+
+### Coal
+```{r}
+coal_sheet <- "coal"
+coal36 <- googlesheets4::read_sheet(gg, "coal", range = "A2:I19")
+
+# gis_sf <- IDEEA.dev::ideea_maps$r34$land$sf
+gis_sf <- get_ideea_map(nreg = 36, rename = F)
+
+coal_sf <- left_join(gis_sf, select(coal36, -`name36`), by = "reg36")
+plot(coal_sf["total_reserve_Mt"], main = "Coal reserves, Mt")
+
+coal <- st_drop_geometry(coal_sf)
+save(coal, file = "data-raw/googlesheets/coal.RData")
+
+```
+
+### Lignite
+```{r}
+lign36 <- googlesheets4::read_sheet(gg, "lignite", range = "A5:M42")
+
+lign36 <- lign36 %>% filter(!is.na(`Total2022-23`)) %>%
+  select(reg36, `Total2022-23`, price_INR_t) %>%
+  rename(total_Mt = `Total2022-23`)
+
+# gis_sf <- IDEEA.dev::ideea_maps$r34$land$sf
+gis_sf <- get_ideea_map(nreg = 36, rename = F)
+
+lign_sf <- left_join(gis_sf, lign36, by = "reg36")
+plot(lign_sf["total_Mt"], main = "Lignite total reserves, Mt")
+
+lignite <- st_drop_geometry(lign_sf)
+save(lignite, file = "data-raw/googlesheets/lignite.RData")
+```
+
+
+### Oil & Natural gas
+```{r}
+oilgas_sheet <- "oil & gas"
+oilgas36 <- googlesheets4::read_sheet(gg, oilgas_sheet, range = "A2:J10")
+oilgas36
+
+gis_sf <- get_ideea_map(nreg = 36, rename = F, offshore = T)
+
+oilgas36_sf <- left_join(gis_sf, select(oilgas36, -`name36`))
+plot(oilgas36_sf["oil_reserve_Mt_2021"])
+names(oilgas36_sf)
+
+oil <- st_drop_geometry(oilgas36_sf) %>%
+  select(matches(c("reg", "offshore", "name", "oil")))
+save(oil, file = "data-raw/googlesheets/oil.RData")
+
+gas <- st_drop_geometry(oilgas36_sf) %>%
+  select(matches(c("reg", "offshore", "name", "gas")))
+save(gas, file = "data-raw/googlesheets/gas.RData")
+
+```
+
+
+### Biomass
+```{r}
+bio_36 <- googlesheets4::read_sheet(gg, "biomass", range = "B2:G39")
+
+gis_sf <- get_ideea_map(nreg = 36, rename = F)
+
+bio_sf <- left_join(gis_sf, select(bio_36, -name36, -reg34), by = "reg36")
+plot(bio_sf["surplus_t"])
+plot(bio_sf["max_MWe"])
+
+biomass <- bio_sf %>% st_drop_geometry()
+save(biomass, file = "data-raw/googlesheets/biomass.RData")
+```
+
+### Wind
+```{r}
+win_36 <- googlesheets4::read_sheet(gg, "wind", range = "A2:H38")
+
+win_sf <- left_join(gis_sf, select(win_36, -name36), by = "reg36")
+plot(win_sf["potential_MW_120"])
+plot(win_sf["installed_MW"])
+
+wind <- win_sf %>% st_drop_geometry()
+save(wind, file = "data-raw/googlesheets/wind.RData")
+
+```
+
+### Solar
+```{r}
+
+```
+
+### Transmission
+#### 5 regions
+```{r}
+transmission_5x5 <- googlesheets4::read_sheet(gg, "transmission_5x5", skip = 1)
+
+transmission_5x5 <- transmission_5x5 %>%
+  pivot_longer(cols =  3:ncol(x), names_to = "dst", values_to = "MW") %>%
+  filter(!is.na(MW))
+
+
+save(transmission_5x5, file = "data-raw/googlesheets/transmission_5x5.RData")
+```
+
+### Corrected Capacity for 2050
+```{r}
+capacity_corrected_2020 <- googlesheets4::read_sheet(
+  gg, "2020_corrected_capacity", range = "B1:G39"
+  ) |> 
+  filter(!is.na(reg36) & !grepl("#N/A", reg36)) |>
+  as.data.table()
+
+capacity_corrected_2020
+if (any(is.na(capacity_corrected_2020))) {
+  stop("Correct NAs in the GoogleSheets or here")
+}
+
+save(capacity_corrected_2020, 
+     file = "data-raw/googlesheets/capacity_corrected_2020.RData")
+
+```
+

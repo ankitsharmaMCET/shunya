@@ -1,0 +1,14 @@
+---
+title: "Carbon capture, utilisation and storage"
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+# library(IDEEA.dev)
+```

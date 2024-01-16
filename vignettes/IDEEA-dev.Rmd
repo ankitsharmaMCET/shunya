@@ -1,0 +1,65 @@
+---
+title: "IDEEA"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{IDEEA}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  eval = FALSE,
+  comment = "#>"
+)
+```
+
+```{r setup, message=FALSE, warning=FALSE}
+library(IDEEA.dev)
+```
+
+
+### Build electric power system model
+```{r, eval=FALSE}
+
+mod <- ideea_modules$model_reg7 %>%
+  add(
+    ideea_modules$energy$COA,
+    ideea_modules$energy$SUP_COA,
+    ideea_modules$energy$GAS,
+    ideea_modules$energy$SUP_GAS,
+    ideea_modules$energy$IMP_GAS,
+    ...,
+    ideea_modules$electricity
+  )
+
+mod <- setMilestoneYears(mod, start = 2050)
+```
+
+### Solve base scenario
+```{r}
+# base scenario (no policy)
+scen_base <- solve(mod)
+summary(scen_base)
+```
+
+
+### Policy scenarios
+```{r}
+scen_CO2_tax <- add(mod, ideea_modules$policy$CO2_tax) %>% solve()
+
+scen_CO2_cap <- add(mod, ideea_modules$policy$CO2_cap) %>% solve()
+
+
+scen_SOX_cap
+...
+
+```
+
+### Reports
+```{r}
+report_scenario(scen_CO2_tax, file = "scen_CO2_tax.pdf", format = "pdf")
+
+```
+

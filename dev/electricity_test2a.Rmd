@@ -1,0 +1,1724 @@
+---
+title: "IDEEA: Electric power sector model"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{power_sector_model}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+resource_files:
+  - images/elc_schematic.jpg
+editor_options:
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  eval = FALSE,
+  comment = "#>"
+)
+```
+
+<!-- This vignette should describe steps of building and configuring the IDEEA model from the data available with the package. A reader should understand the model structure, the sources of the data, and main assumptions. -->
+
+
+```{r, echo=FALSE, fig.cap="Schematic representation of IDEEA electricity model"}
+try(knitr::include_graphics("images/elc_schematic.jpg"), silent = T)
+if (packageVersion("energyRt") < '0.10.10') {
+  stop('Please update energyRt.
+       remotes::install_github("energyRt/energyRt", ref = "dev")')
+}
+```
+
+# Configuration
+```{r, eval = T}
+nreg <- 7 # number of regions
+offshore <- FALSE # TRUE/FALSE
+islands <- FALSE
+# time resolution
+base_year <- 2020
+yday_sample <- 15 + cumsum(lubridate::days_in_month(1:11))
+hour_sample <- 0:23
+```
+
+```{r, eval=TRUE, include=FALSE, message=FALSE, warning=FALSE}
+# try(source("data-raw/solver_options.R"), silent = T)
+# try(source("../data-raw/solver_options.R"), silent = T)
+try(source("../solver_options_generic.R"), silent = T)
+if (Sys.info()["sysname"] == "Darwin") {
+  # Mac OS
+  try(GAMS_custom = GAMS_mac)
+} else {
+  GAMS_custom <- list(
+    # cmdline = "/Applications/GAMS25.1/sysdir/gams energyRt.gms", # MacOS/Linux
+    cmdline = "C:/GAMS/win64/32.2/gams.exe energyRt.gms", # Windows
+    lang = "GAMS",
+    solver = "cplex",
+    export_format = "gdx"
+    # solver = "cbc"
+  )
+  # try(GAMS_custom = GAMS_parallel, silent = T)
+}
+```
+
+
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(data.table)
+library(sf)
+library(glue)
+library(data.table)
+devtools::load_all(".")
+# library(IDEEA.dev)
+# library(IDEEA)
+# library(energyRt)
+# remotes::install_github("energyRt/timeslices")
+
+regN <- glue("reg", nreg)
+regN_off <- paste0(regN, "_off")
+
+set_gdxlib_path("C:/GAMS/35")
+```
+
+## Regions
+<!-- A short desc of alternative regional division and how it affects the modeling results/accuracy and computational burden. reference to the `maps` article. -->
+```{r regions}
+gis_sf <- get_ideea_map(nreg, offshore = T, reg_off = T)
+a <- plot(gis_sf["reg_off"], key.width = lcm(4))
+# try(a)
+
+# aggregating data (!!!write a function)
+agg36toN <- get_ideea_map(46, offshore = T, rename = F, islands = T) %>%
+  st_drop_geometry() %>%
+  select(reg36, all_of(regN), offshore) %>%
+  unique() %>%
+  mutate(reg36_off = if_else(offshore, paste0(reg36, "_off"), reg36))
+
+agg36toN[[regN_off]] <- if_else(agg36toN$offshore,
+  paste0(agg36toN[[regN]], "_off"),
+  agg36toN[[regN]]
+)
+```
+
+## Time resolution  
+<!-- describe several options of the time resolution, start with the commonly used ANNUAL/YDAY/HOUR structure -->
+```{r}
+# full 24x365 sets
+# timetable_full_year <- IDEEA.dev::ideea_modules$time_tables$d365_h24
+timetable_full_year <- ideea_modules$time_tables$d365_h24
+
+timetable_subset <- timetable_full_year %>%
+  filter(YDAY %in% yday2YDAY(yday_sample)) %>%
+  filter(HOUR %in% hour2HOUR(hour_sample))
+
+timetable_subset
+
+SUBSET_HOURS <- nrow(timetable_subset) # total hours in the subset
+FRACT_YEAR <- SUBSET_HOURS / 8760 # fraction in a year
+print("Subannual time resolution:")
+print(paste("   Total number of days a year:", length(yday_sample)))
+print(paste("   Total number of hours per year:", SUBSET_HOURS))
+```
+
+## Model horizon
+* base year  
+* milestone years, horizon  
+
+```{r}
+```
+
+
+## Commodities
+
+```{r}
+# energy
+ELC <- newCommodity(
+  name = "ELC",
+  desc = "Electricity",
+  unit = "GWh",
+  timeframe = "HOUR"
+)
+
+# # using saved data from `energy` module
+# COA <- ideea_modules$energy$COA
+# GAS <- ideea_modules$energy$GAS
+# BIO <- ideea_modules$energy$BIO
+
+# emissions
+CO2 <- newCommodity(
+  name = "CO2",
+  desc = "Carbon emissions",
+  unit = "kt",
+  timeframe = "ANNUAL"
+)
+
+NOX <- newCommodity(
+  name = "NOX",
+  desc = "Nitrogen oxide emissions NOx",
+  unit = "kt",
+  timeframe = "ANNUAL"
+)
+
+SOX <- newCommodity(
+  name = "SOX",
+  desc = "Sulfur oxide emissions SOx",
+  unit = "kt",
+  timeframe = "ANNUAL"
+)
+
+PM <- newCommodity(
+  name = "PM",
+  desc = "Particulate matter (particle pollution)",
+  unit = "kt",
+  timeframe = "ANNUAL"
+)
+
+REN <- newCommodity(
+  name = "REN",
+  desc = "Generic renewable energy",
+  unit = "GWh",
+  timeframe = "ANNUAL"
+)
+
+repo_comm <- newRepository(
+  name = "repo_comm",
+  desc = "Electricity & emissions commodity"
+) %>%
+  add(ELC, CO2, NOX, SOX, PM)
+```
+
+
+## Demand options
+
+### Final/exogenous demand
+class demand
+groups of demand (split by sectors)
+```{r}
+load_BY <- ideea_data$load_2019_MWh %>%
+  # filter(slice %in% SLICE_SUBSET) %>%
+  select(all_of(c("reg36", "slice", "MWh"))) %>%
+  left_join(filter(agg36toN, !offshore), by = c(reg36 = "reg36")) %>%
+  rename(reg_off = ends_with(regN_off), region = ends_with(regN)) %>%
+  mutate(year = base_year) %>%
+  group_by(region, reg_off, year, slice) %>%
+  summarise(
+    GWh = sum(MWh, na.rm = T) / 1e3, # -> GWh
+    .groups = "drop"
+  )
+
+# demand adjustment for representative (sampled) hours
+# making the total equal annual
+# dem_adj <- sum(ideea_data$load_2019_MWh$MWh) / 1e3 / sum(dat$GWh)
+
+DEMELC_BY <- newDemand(
+  name = "DEMELC_BY",
+  desc = "houlry electric demand by region",
+  commodity = "ELC",
+  unit = ELC@unit,
+  dem = data.frame(
+    region = load_BY$region,
+    # year = load_BY$year,
+    slice = load_BY$slice, # comment to assign to all hours
+    dem = load_BY$GWh # * dem_adj
+  )
+)
+
+# load_0 <- load_BY %>%
+load_2x_2050 <-
+  rbind(
+    mutate(load_BY, year = 2020, GWh = 0.0 * GWh),
+    mutate(load_BY, year = 2050, GWh = 2 * GWh)
+  )
+
+load_BY %>% as.data.table()
+
+DEMELC_2X <- newDemand(
+  name = "DEMELC_2X",
+  desc = "Additional demand growth, proportional current load",
+  commodity = "ELC",
+  unit = ELC@unit,
+  dem = data.frame(
+    region = load_2x_2050$region,
+    year = load_2x_2050$year,
+    slice = load_2x_2050$slice, # comment to assign to all hours
+    dem = load_2x_2050$GWh # * dem_adj
+  )
+)
+```
+
+
+### Demand-side technologies (groups)
+```{r}
+```
+
+## Supply & resources
+
+### Energy
+domestic reserves, mining, costs, import/export
+```{r}
+repo_supply <- newRepository(
+  name = "repo_supply",
+  desc = "Energy supply (markets)"
+) %>%
+  add( # from energy module
+    # coal
+    ideea_modules$energy$COA, # commodity
+    ideea_modules$energy$SUP_COA, # supply
+    ideea_modules$energy$IMP_COA, # import
+    # natural gas
+    ideea_modules$energy$GAS,
+    ideea_modules$energy$SUP_GAS,
+    ideea_modules$energy$IMP_GAS,
+    # oil
+    ideea_modules$energy$OIL,
+    ideea_modules$energy$SUP_OIL,
+    ideea_modules$energy$IMP_OIL,
+    # biomass
+    ideea_modules$energy$BIO,
+    ideea_modules$energy$RES_BIO, # domestic resource of biomass
+    # nuclear
+    ideea_modules$energy$NUC,
+    ideea_modules$energy$IMP_NUC, # Nuclear fuel international market
+    #
+    REN, # all type of non-fuel (renewable) energy
+    newSupply("RES_REN", commodity = "REN"),
+    overwrite = F
+  )
+```
+
+### Carbon sink / aquifers
+potential CO2 storage, volume, locations
+
+## Capacity factors
+
+### Solar
+NREL, MERRA2, (ERA5), potential location
+```{r}
+merra_solar <- ideea_data$merra_solar_cf_reg7 %>%
+  # filter(slice %in% SLICE_SUBSET) %>%
+  rename(region = reg7_off) %>%
+  filter(region %in% gis_sf$region)
+
+WSOL <- newWeather(
+  name = "WSOL",
+  desc = "Solar capacity factors, tilted tracking system (tl)",
+  region = unique(merra_solar$region),
+  timeframe = "HOUR",
+  weather = data.frame(
+    region = merra_solar$region,
+    slice = merra_solar$slice,
+    # year = NA # all years
+    wval = merra_solar$scf_tl
+  )
+)
+```
+
+### Wind
+NREL, MERRA2, (ERA5), potential location
+
+```{r}
+merra_wind <- ideea_data$merra_wind_cf_reg7 %>%
+  # filter(slice %in% SLICE_SUBSET) %>%
+  rename(region = reg7_off) %>%
+  filter(region %in% gis_sf$region)
+
+WWIN <- newWeather(
+  name = "WWIN",
+  desc = "Onshore wind 100m height",
+  region = unique(merra_wind$region),
+  timeframe = "HOUR",
+  weather = data.frame(
+    region = merra_wind$region,
+    slice = merra_wind$slice,
+    # year = NA # same for all years
+    wval = merra_wind$wcf100m
+  )
+)
+```
+
+### Hydro
+current capacity, seasonality, day/night
+```{r}
+```
+
+
+## Generating technologies
+desc of total capacity, by region, map
+
+```{r}
+# cap_0 <- ideea_data$generators_wri %>%
+#   left_join(ideea_data$reg_tbl) %>%
+#   group_by(across(all_of(regN)), mainland, primary_fuel) %>%
+#   summarize(
+#     capacity_mw = sum(capacity_mw, na.rm = T),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(region = .data[[regN]], .before = 1) %>%
+#   select(-all_of(regN))
+# ideea_r36_sf <- get_ideea_map(36, T, T)
+# gis_sf
+
+cap_0 <- get_ideea_data("generators_wri", 
+                        variable = c("primary_fuel", "capacity_mw"),
+                        nreg = nreg, offshore = F, islands = T) |>
+  rename(region = {{regN}})
+
+# cap_1 <- capacity_corrected_2020
+# cap_1 <- summarise(
+#   select(
+#     group_by(cap_1, Region),
+#     Solar, Wind, Biomass
+#   ),
+#   Solar = sum(Solar, na.rm = TRUE),
+#   Wind = sum(Wind, na.rm = TRUE),
+#   Biomass = sum(Biomass, na.rm = TRUE)
+# )
+
+# ideea_data$generators_2020 |> names()
+
+cap_1 <- get_ideea_data(
+  name = "generators_2020", 
+  # nreg = 36, 
+  nreg = nreg, 
+  variable = c("Solar", "Wind", "Biomass", "Small Hydro"), 
+  # offshore = T, # not working properly - bug
+  islands = T) |>
+  rename(region = {{regN}}) |>
+  as.data.table()
+
+cap <- bind_rows(
+  filter(cap_0, !grepl("Solar|Wind|Biomass", primary_fuel)),
+  pivot_longer(
+    cap_1, cols = 3:6, names_to = "primary_fuel", values_to = "capacity_mw"
+    )
+  ) |>
+  mutate(offshore = FALSE, .after = "mainland") |>
+  as.data.table()
+
+cap_sf <- gis_sf %>%
+  right_join(cap) %>%
+  filter(!is.na(primary_fuel))
+
+a <- ggplot() +
+  geom_sf(data = gis_sf, fill = "grey") +
+  geom_sf(aes(fill = capacity_mw / 1e3), data = cap_sf) +
+  scale_fill_viridis_c(option = "H", name = "GW", trans = "log10") +
+  facet_wrap(~primary_fuel) +
+  theme_bw() +
+  theme(
+    # panel.background = element_rect(fill = "aliceblue"),
+    # panel.grid = element_line(color = "white", size = 0.8),
+    axis.ticks = element_blank(),
+    axis.text = element_blank()
+  )
+ggsave("tmp/wri_installed_capacity.png", a,
+  width = 6, height = 7,
+  scale = 1.25
+)
+try(a)
+
+cap$primary_fuel %>% unique()
+```
+
+
+### Coal-fired
+WRI dataset, new - the same and BAT
+
+```{r}
+cap_coa <- cap %>%
+  filter(grepl("Coal", primary_fuel)) %>%
+  filter(!offshore) %>%
+  mutate(year = 2020, .before = 1)
+
+# assume retirement of 2020 capacity by 2030
+cap_coa_2030 <- cap_coa %>%
+  mutate(year = 2030, capacity_mw = 0.8 * capacity_mw)
+
+# assume retirement of 2020 capacity by 2030
+cap_coa_2040 <- cap_coa %>%
+  mutate(year = 2040, capacity_mw = 0.1 * capacity_mw)
+
+# combine
+cap_coa <- cap_coa %>%
+  bind_rows(cap_coa_2030) %>%
+  bind_rows(cap_coa_2040)
+# Note: the existing capacity will be linearly interpolated from 2020 to 2040
+# cap = 0 after 2040
+
+# load coal technology (assume Super-critical for all existing capacity)
+ECOASUP_2020 <- ideea_modules$techs$ECOASUP@data$ECOASUP_2020
+class(ECOASUP_2020)
+
+# update base-year technology with preexisting capacity
+ECOASUP_2020 <- ECOASUP_2020 %>%
+  update(stock = data.frame(
+    region = cap_coa$region,
+    year = cap_coa$year,
+    stock = cap_coa$capacity_mw / 1e3 # in GW
+  ))
+
+# load most advanced coal techs for new investment
+ECOA <- ideea_modules$techs$ECOAULT %>% # ultra-super-critical
+  add(ECOASUP_2020) # add tech with existing capacity
+names(ECOA@data)
+
+draw(ECOA@data$ECOASUP_2020)
+draw(ECOA@data$ECOAULT_2040)
+
+# ECOA_rump <- ECOA@data$ECOAULT_2020
+# ECOA_rump@af$year <- 2020
+# ECOA_rump@af$slice <- as.character(NA)
+# ECOA_rump@af$slice <- "ANNUAL"
+# ECOA_rump@af
+```
+
+### Natural gas
+```{r cap_gas}
+cap_gas <- cap %>%
+  filter(grepl("Gas", primary_fuel)) %>%
+  filter(!offshore) %>%
+  mutate(year = 2020, .before = 1)
+
+# assume retirement of 2020 capacity by 2030
+cap_gas_2030 <- cap_gas %>%
+  mutate(year = 2030, capacity_mw = 0.8 * capacity_mw)
+
+# assume retirement of 2020 capacity by 2030
+cap_gas_2040 <- cap_gas %>%
+  mutate(year = 2040, capacity_mw = 0.1 * capacity_mw)
+
+# combine
+cap_gas <- cap_gas %>%
+  bind_rows(cap_gas_2030) %>%
+  bind_rows(cap_gas_2040)
+# Note: the existing capacity will be linearly interpolated from 2020 to 2040
+# cap = 0 after 2040
+
+# load coal technology (assume Super-critical for all existing capacity)
+ENGCC_2020 <- ideea_modules$techs$ENGCC@data$ENGCC_2020
+class(ENGCC_2020)
+
+# update base-year technology with preexisting capacity
+ENGCC_2020 <- ENGCC_2020 %>%
+  update(stock = data.frame(
+    region = cap_gas$region,
+    year = cap_gas$year,
+    stock = cap_gas$capacity_mw / 1e3 # in GW
+  ))
+
+# load most advanced coal techs for new investment
+EGAS <- ideea_modules$techs$ENGCC %>% # ultra-super-critical
+  add(ENGCC_2020, overwrite = T) # add tech with existing capacity
+names(EGAS@data)
+
+draw(EGAS@data$ENGCC_2020)
+# draw(ECOA@data$ENGCC_2040)
+```
+
+### Solar
+existing - from WRI dataset
+```{r}
+# solar capacity in ~2020
+cap_sol <- cap %>%
+  filter(grepl("Solar", primary_fuel)) %>%
+  mutate(year = 2020, .before = 1)
+
+# updating the solar base year capacity to correct values
+# cap_sol[2:6, 6] <- cap_1[1:5, 2]
+
+# assume retirement of 2020 capacity by 2030
+cap_sol_2030 <- cap_sol %>%
+  mutate(year = 2030, capacity_mw = 0.8 * capacity_mw)
+
+# assume further retirement by 2040
+cap_sol_2040 <- cap_sol %>%
+  mutate(year = 2040, capacity_mw = 0.1 * capacity_mw)
+
+# combine
+cap_sol <- cap_sol %>%
+  bind_rows(cap_sol_2030) %>%
+  bind_rows(cap_sol_2040)
+# Note: the existing capacity will be linearly interpolated from 2020 to 2040
+# cap = 0 after 2040
+
+# load repository with solar technologies
+ESOL <- ideea_modules$techs$ESOL
+class(ESOL) # repository with solar techs
+names(ESOL@data)
+
+# update base-year technology with preexisting capacity
+ESOL@data$ESOL_2020 <- ESOL@data$ESOL_2020 %>%
+  update(stock = data.frame(
+    region = cap_sol$region,
+    year = cap_sol$year,
+    stock = cap_sol$capacity_mw / 1e3 # in GW
+  ))
+
+# add weather factor name and parameter for each technology
+ESOL@data <- lapply(ESOL@data, function(tech) {
+  update(
+    tech,
+    weather = data.frame(weather = "WSOL", waf.fx = 1),
+    input = list(comm = "REN", combustion = 0)
+  )
+})
+names(ESOL@data)
+ESOL@data$ESOL_2020@weather
+
+ESOL@data$ESOL_2020 %>% draw()
+```
+
+### Wind
+existing - from WRI dataset
+```{r}
+cap_win <- cap %>%
+  filter(grepl("Wind", primary_fuel)) %>%
+  mutate(year = 2020, .before = 1)
+# correcting the 2020 base year capacity values for wind.
+# cap_win[, 6] <- cap_1[c(2, 4, 5), 3]
+
+# assume retirement of 2020 capacity by 2030
+cap_win_2030 <- cap_win %>%
+  mutate(year = 2030, capacity_mw = 0.8 * capacity_mw)
+
+# assume further retirement by 2040
+cap_win_2040 <- cap_win %>%
+  mutate(year = 2040, capacity_mw = 0.1 * capacity_mw)
+
+# combine
+cap_win <- cap_win %>%
+  bind_rows(cap_win_2030) %>%
+  bind_rows(cap_win_2040)
+# Note: the existing capacity will be linearly interpolated from 2020 to 2040
+# cap = 0 after 2040
+
+# load repository with wind technologies
+EWIN <- ideea_modules$techs$EWIN
+class(EWIN) # repository with wind techs
+names(EWIN@data)
+
+# update base-year technology with preexisting capacity
+EWIN@data$EWIN_2020 <- EWIN@data$EWIN_2020 %>%
+  update(stock = data.frame(
+    region = cap_win$region,
+    year = cap_win$year,
+    stock = cap_win$capacity_mw / 1e3 # in GW
+  ))
+
+# add weather factor name and parameter for each technology
+EWIN@data <- lapply(EWIN@data, function(tech) {
+  update(
+    tech,
+    weather = data.frame(weather = "WWIN", waf.fx = 1),
+    input = list(comm = "REN", combustion = 0)
+  )
+})
+names(EWIN@data)
+EWIN@data$EWIN_2020@weather
+
+EWIN@data$EWIN_2020 %>% draw()
+```
+
+### Hydro
+existing - from WRI dataset, no new?
+```{r}
+cap_hyd <- cap %>%
+  filter(grepl("Hydro", primary_fuel)) %>%
+  mutate(primary_fuel = "Hydro") |> # combining Small with other - assumption (!)
+  # filter(!offshore) %>%
+  group_by(region, mainland, primary_fuel) |>
+  summarise(capacity_mw = sum(capacity_mw, na.rm = T), .groups = "drop") |>
+  filter(capacity_mw > 0) |>
+  mutate(year = 2020, .before = 1)
+
+# assume retirement of 2020 capacity by 2030
+cap_hyd_2030 <- cap_hyd %>%
+  mutate(year = 2030, capacity_mw = 1 * capacity_mw)
+
+# assume retirement of 2020 capacity by 2030
+cap_hyd_2040 <- cap_hyd %>%
+  mutate(year = 2060, capacity_mw = 1 * capacity_mw)
+
+# combine
+cap_hyd <- cap_hyd %>%
+  bind_rows(cap_hyd_2030) %>%
+  bind_rows(cap_hyd_2040)
+# Note: the existing capacity will be linearly interpolated from 2020 to 2040
+# cap = 0 after 2040
+
+# load base-year technology
+EHYD_2020 <- ideea_modules$techs$EHYD@data$EHYD_2020
+class(EHYD_2020)
+
+# update base-year technology with preexisting capacity
+EHYD_2020 <- EHYD_2020 %>%
+  update(
+    stock = data.frame(
+      region = cap_hyd$region,
+      year = cap_hyd$year,
+      stock = cap_hyd$capacity_mw / 1e3 # in GW
+    ),
+    end = list(end = 2010) # not available for investment
+  )
+
+EHYD <- ideea_modules$techs$EHYD %>% #
+  add(EHYD_2020, overwrite = T) # add tech with existing capacity
+names(EHYD@data)
+
+draw(EHYD@data$EHYD_2020)
+```
+
+### Nuclear
+```{r}
+cap_nuc <- cap %>%
+  filter(grepl("Nuclear", primary_fuel)) %>%
+  filter(!offshore) %>%
+  mutate(year = 2020, .before = 1)
+
+# assume retirement of 2020 capacity by 2060
+cap_nuc_2030 <- cap_nuc %>%
+  mutate(year = 2030, capacity_mw = 1 * capacity_mw)
+
+# assume retirement of 2020 capacity by 2030
+cap_nuc_LAST <- cap_nuc %>%
+  mutate(year = 2060, capacity_mw = 1 * capacity_mw)
+
+# combine
+cap_nuc <- cap_nuc %>%
+  bind_rows(cap_nuc_2030) %>%
+  bind_rows(cap_nuc_LAST)
+# Note: the existing capacity will be linearly interpolated from 2020 to 2040
+# cap = 0 after 2040
+
+# load base-year technology
+ENUC_2020 <- ideea_modules$techs$ENUC@data$ENUC_2020
+class(ENUC_2020)
+
+# update base-year technology with preexisting capacity
+ENUC_2020 <- ENUC_2020 %>%
+  update(
+    stock = data.frame(
+      region = cap_nuc$region,
+      year = cap_nuc$year,
+      stock = cap_nuc$capacity_mw / 1e3 # in GW
+    ),
+    end = list(end = 2010) # not available for investment
+  )
+
+ENUC <- ideea_modules$techs$ENUC %>% #
+  add(ENUC_2020, overwrite = T) # add tech with existing capacity
+names(ENUC@data)
+
+draw(ENUC@data$ENUC_2020)
+```
+
+### CCS
+do we have any studies for India? Costs of CCS and the potential storage?
+```{r}
+```
+
+
+### Bio energy
+bio-reactors, agricultural waste/residue
+```{r}
+cap_bio <- cap %>%
+  filter(grepl("Biomass", primary_fuel)) %>%
+  filter(!offshore) %>%
+  mutate(year = 2020, .before = 1)
+
+# updating the bioenergy based electricity generation capacity for base year 2020
+# cap_bio[, 6] <- cap_1[c(2, 4, 5), 4]
+
+# assume retirement of 2020 capacity by 2030
+cap_bio_2030 <- cap_bio %>%
+  mutate(year = 2030, capacity_mw = 1 * capacity_mw)
+
+# assume retirement of 2020 capacity by 2030
+cap_bio_2040 <- cap_bio %>%
+  mutate(year = 2060, capacity_mw = 1 * capacity_mw)
+
+# combine
+cap_bio <- cap_bio %>%
+  bind_rows(cap_bio_2030) %>%
+  bind_rows(cap_bio_2040)
+# Note: the existing capacity will be linearly interpolated from 2020 to 2040
+# cap = 0 after 2040
+
+# load base-year technology
+EBIO_2020 <- ideea_modules$techs$EBIO@data$EBIO_2020
+class(EBIO_2020)
+
+# update base-year technology with preexisting capacity
+EBIO_2020 <- EBIO_2020 %>%
+  update(stock = data.frame(
+    region = cap_bio$region,
+    year = cap_bio$year,
+    stock = cap_bio$capacity_mw / 1e3 # in GW
+  ))
+
+EBIO <- ideea_modules$techs$EBIO %>% #
+  add(EBIO_2020, overwrite = T) # add tech with existing capacity
+names(EBIO@data)
+
+draw(EBIO@data$EBIO_2020)
+```
+
+## Energy storage
+```{r}
+# ideea_modules$techs
+STG_BTR <- ideea_modules$techs$STG_BTR
+# STG_BTR_2020 <- ideea_modules$techs[["STG_BTR"]]@data$STG_BTR_2020
+# STG_BTR_2030 <- ideea_modules$techs[["STG_BTR"]]@data$STG_BTR_2030
+# STG_BTR@start <- newStorage("")@start
+# STG_BTR@end <- newStorage("")@end
+# STG_BTR@olife$olife <- 20
+# STG_BTR@invcost$invcost <- 0
+# STG_BTR@fixom$fixom <- 1
+# STG_BTR <- STG_BTR %>%
+#   update(seff = list(inpeff = .9))
+```
+
+
+## Transmission
+```{r}
+transmission_existing <- ideea_data$transmission_5x5 %>%
+  filter(scenario == "current", !is.na(MW)) %>%
+  rename(dst = destination) %>%
+  filter(!duplicated(MW)) # temporary solution
+
+gis_mainland_sf <- filter(gis_sf, offshore == F, mainland == T)
+points_coord <- st_centroid(gis_mainland_sf) %>%
+  st_coordinates() %>%
+  as.data.frame() %>%
+  cbind(data.frame(region = gis_mainland_sf$region)) %>%
+  rename(lon = X, lat = Y)
+
+a <- transmission_existing %>%
+  # filter(scenario == "current") %>%
+  left_join(points_coord, by = c("region" = "region")) %>%
+  left_join(points_coord, by = c("dst" = "region")) %>%
+  mutate(GW = MW / 1000)
+
+ggplot() +
+  geom_sf(data = gis_sf, fill = "wheat") +
+  geom_segment(
+    aes(
+      x = lon.x, y = lat.x, xend = lon.y, yend = lat.y,
+      linewidth = GW
+    ),
+    color = "dodgerblue", lineend = "round",
+    data = filter(a, scenario == "current")
+  ) +
+  geom_segment(aes(x = lon.x, y = lat.x, xend = lon.y, yend = lat.y),
+    color = alpha("white", .5), lineend = "round",
+    data = filter(a, scenario == "new")
+  ) +
+  geom_point(aes(lon, lat), data = points_coord, color = "red") +
+  labs(x = "", y = "") +
+  theme_bw()
+
+network <- transmission_existing %>%
+  filter(scenario == "current") %>%
+  mutate(
+    trd_name = paste("TRD", region, dst, sep = "_")
+  ) %>%
+  rename(
+    region.x = region,
+    region.y = dst
+  )
+
+repo_transmission_existing <- newRepository("transmission_existing")
+if (nrow(network) > 0) {
+  for (i in 1:nrow(network)) {
+    trd <- newTrade(
+      name = network$trd_name[i],
+      # desc = network$lines_type[i],
+      commodity = "ELC",
+      routes = data.frame(
+        src = c(network$region.x[i], network$region.y[i]),
+        dst = c(network$region.y[i], network$region.x[i])
+      ),
+      trade = data.frame(
+        src = c(network$region.x[i], network$region.y[i]),
+        dst = c(network$region.y[i], network$region.x[i]),
+        teff = rep(1 - .1, 2)
+      ),
+      capacityVariable = T,
+      # invcost = data.frame(
+      #   # costs can be assigned to one of the connected region or both
+      #   # here we split the costs, 50% for each region
+      #   region = c(network$region.x[i], network$region.y[i]),
+      #   invcost = rep(1000, 2) * 2 # olife == 2
+      # ),
+      # olife = 50, # doubled annualized invcost for consistency
+      end = base_year - 100,
+      stock = data.frame(
+        year = c(2020, 2070),
+        stock = c(network$MW[i], network$MW[i])
+      ),
+      cap2act = 24 * 365
+    )
+    repo_transmission_existing <- add(repo_transmission_existing, trd)
+    rm(trd)
+  }
+}
+names(repo_transmission_existing)
+
+transmission_new <- ideea_data$transmission_5x5 %>%
+  filter(scenario == "new", !is.na(MW)) %>%
+  rename(dst = destination) %>%
+  filter(!duplicated(MW)) # temporary solution
+
+repo_transmission_new <- newRepository("transmission_new")
+if (nrow(network) > 0) {
+  for (i in 1:nrow(network)) {
+    trd <- newTrade(
+      name = str_replace(network$trd_name[i], "TRD_", "TRN_"),
+      # desc = network$lines_type[i],
+      commodity = "ELC",
+      routes = data.frame(
+        src = c(network$region.x[i], network$region.y[i]),
+        dst = c(network$region.y[i], network$region.x[i])
+      ),
+      trade = data.frame(
+        src = c(network$region.x[i], network$region.y[i]),
+        dst = c(network$region.y[i], network$region.x[i]),
+        teff = rep(1 - .1, 2)
+      ),
+      capacityVariable = T,
+      invcost = data.frame(
+        # costs can be assigned to one of the connected region or both
+        # here we split the costs, 50% for each region
+        region = c(network$region.x[i], network$region.y[i]),
+        invcost = rep(1000, 2) / 2 # olife == 2
+      ),
+      olife = 50, # doubled annualized invcost for consistency
+      start = base_year - 10,
+      # stock = data.frame(
+      #   # year =
+      #   stock = network$MW[i]
+      # ),
+      cap2act = 24 * 365
+    )
+    repo_transmission_new <- add(repo_transmission_new, trd)
+    rm(trd)
+  }
+}
+names(repo_transmission_new)
+```
+
+## Unserved load
+```{r}
+UNSERVED <- newImport(
+  name = "UNSERVED",
+  desc = "Unserved load, ~ 10 cr.INR/GWh, equal 100 INR/kWh",
+  commodity = "ELC",
+  unit = "GWh",
+  imp = list(price = 10)
+)
+```
+
+
+
+## Policies
+carbon emissions, climate, air quality, SOx, NOx, PM, etc.  
+* national  
+* state, local  
+any other regulations of electric power sector  
+```{r}
+CO2_CAP <- newConstraint("CO2_CAP",
+  eq = "<=",
+  rhs = list(
+    year = c(2025, 2055),
+    rhs = c(300000, 0)
+  ),
+  for.each = list(year = NULL), # Cap total emission
+  variable = list(
+    variable = "vBalance",
+    for.sum = list(
+      comm = "CO2",
+      slice = NULL,
+      region = NULL
+    )
+  )
+)
+```
+
+```{r}
+NO_NEW_HYDRO <- newConstraint(
+  name = "NO_NEW_HYDRO",
+  # desc = "Constraint on new Hydro plants construction",
+  eq = "<=",
+  for.each = list(year = NULL),
+  variable = list(
+    variable = "vTechNewCap",
+    for.sum = list(
+      tech = c("EHYD_2030", "EHYD_2040", "EHYD_2050", "EHYD_2020"),
+      region = NULL
+    )
+  ),
+  rhs = data.frame(
+    year = c(2020, 2060),
+    rhs = c(0)
+  )
+)
+
+NO_NEW_NUCLEAR <- newConstraint(
+  name = "NO_NEW_NUCLEAR",
+  # desc = "Constraint on new Hydro plants construction",
+  eq = "<=",
+  for.each = list(year = 2020:2060),
+  variable = list(
+    variable = "vTechNewCap",
+    for.sum = list(
+      tech = c("ENUC_2030", "ENUC_2040", "ENUC_2050", "ENUC_2020"),
+      region = NULL
+    )
+  ),
+  rhs = data.frame(
+    year = c(2020:2060),
+    rhs = 0
+    # rhs = c(1e-7) #eps
+  )
+)
+
+dput(names(EGAS))
+CT_EGAS <- newConstraint(
+  name = "CT_EGAS",
+  # desc = "Constraint on new Hydro plants construction",
+  eq = "<=",
+  for.each = list(year = c(2020, 2055)),
+  variable = list(
+    variable = "vTechNewCap",
+    for.sum = list(
+      tech = dput(names(EGAS)),
+      region = NULL
+    )
+  ),
+  rhs = list(
+    year = c(2020, 2055),
+    rhs = c(5, 5)
+  )
+)
+# limit on hydro construction
+```
+
+## Model
+```{r}
+repo <- newRepository("repo") %>%
+  add(
+    # commodities
+    # ELC, COA, CO2, NOX, SOX,
+    repo_comm,
+    # supply & import
+    repo_supply,
+    # Generating technologies
+    ECOA,
+    EGAS,
+    # CT_EGAS,
+    # ENUC$ENUC_2020,
+    ENUC,
+    NO_NEW_NUCLEAR,
+    # EHYD$EHYD_2020,
+    EHYD,
+    NO_NEW_HYDRO, # limit on hydro construction
+    ESOL, WSOL,
+    EWIN, WWIN,
+    # STG_BTR_2020,
+    # STG_BTR_2030,
+    STG_BTR,
+    # transmission
+    repo_transmission_existing,
+    repo_transmission_new,
+    # unserved load
+    UNSERVED,
+    # demand
+    DEMELC_BY,
+    DEMELC_2X
+  )
+# fract_year_adj_repo(subset_hours = SUBSET_HOURS)
+length(repo)
+print(repo)
+names(repo)
+summary(repo)
+
+# model horizon
+horizon_2020_2055_by_10 <- newHorizon(
+  period = 2020:2055,
+  intervals = c(1, 5, 10, 10, rep(10, 15))
+)
+horizon_2020_2055_by_10
+
+# model calendar with sub-annual time specification
+full_calendar_d365_h24 <- newCalendar(ideea_modules$time_tables$d365_h24)
+
+# Adjust annual parameters for partial year solution
+# (temporary solution - until implementation of the method in energyRt)
+# repo <- fract_year_adj_repo(repo, SUBSET_HOURS)
+
+# repo_subset <- subset_slices_repo(repo, SLICE_SUBSET, YDAY_SUBSET)
+
+# model-class object
+mod <- newModel(
+  name = "IDEEA_r7_base",
+  desc = "IDEEA example model",
+  region = unique(gis_sf$region),
+  discount = 0.05,
+  calendar = full_calendar_d365_h24,
+  horizon = horizon_2020_2055_by_10,
+  data = repo
+)
+
+mod@config@horizon
+mod@config@calendar@timetable
+# setHorizon(mod, 2020:2055, c(1, 5, 10, 10, rep(10, 15)))
+
+# Check the model time-slices
+# mod@sysInfo@slice@levels %>% as.data.table()
+
+# Set milestone-years
+# mdl <- setMilestoneYears(mdl, start = 2015, interval = c(1, 2, 5, 6, 7, rep(10, 3)))
+# mdl <- setMilestoneYears(mdl, start = baseYear, interval = c(1, diff(modYears)))
+# mod <- setMilestoneYears(mod,
+#                          start = 2050,
+#                          # start = base_year,
+#                          interval = c(1))
+#                          # interval = c(1, 5, 10))
+#                          # interval = c(1, 3, 4, 5, 5, 5, 5, 5))
+#                          # interval = c(1, 5, 10, 10, 10))
+# mod@sysInfo@milestone # check
+```
+
+# solve full model
+Note:
+The full model requires powerful solver (CPLEX or GUROBI) and GAMS
+Julia or Python + CPLEX/GUROBI will also work, but currently require much more time to generate the problem for a solver. It is recommended to solve the model for a portion of a year (subset of time-slices), which can be solved with free solvers such as HiGHS or Cbc.
+```{r, eval=FALSE}
+scen_base <- interpolate(mod, name = "scen_base")
+summary(scen_base)
+
+scen_CO2CAP <- interpolate(mod, CO2_CAP, name = "scen_CO2CAP")
+summary(scen_CO2CAP)
+
+scen_base <- write_sc(
+  scen_base,
+  solver = GAMS_barrier,
+  tmp.dir = file.path(
+    # "D:/Dropbox/Xeon_link/IDEEA-xeon",
+    "solwork", "IDEEA", "scen_base", "GAMS_barrier"
+  )
+)
+scen_base@misc$tmp.dir <- file.path(
+    # "D:/Dropbox/Xeon_link/IDEEA-xeon", 
+    "solwork", "IDEEA", "scen_base", "GAMS_barrier"
+  )
+
+solve(scen_base, wait = FALSE)
+scen_base <- read_solution(scen_base)
+save(scen_base, file = file.path(scen_base@misc$tmp.dir, "scen_base.RData"))
+summary(scen_base)
+getData(scen_base, "vBalance", comm = "CO2", merge = T) %>%
+  group_by(scenario, comm, year) %>%
+  summarise(value = sum(value))
+
+
+scen_CO2CAP <- write_sc(
+  scen_CO2CAP,
+  solver = GAMS_barrier,
+  tmp.dir = file.path(
+    # "D:/Dropbox/Xeon_link/IDEEA-xeon",
+    "solwork", "IDEEA", "scen_CO2CAP", "GAMS_barrier"
+  )
+)
+
+solve(scen_CO2CAP, wait = FALSE)
+scen_CO2CAP@misc$tmp.dir <- file.path(
+    # "D:/Dropbox/Xeon_link/IDEEA-xeon",
+    "solwork", "IDEEA", "scen_CO2CAP", "GAMS_barrier"
+  )
+
+scen_CO2CAP <- read_solution(scen_CO2CAP)
+save(scen_CO2CAP, file = file.path(scen_CO2CAP@misc$tmp.dir, "scen_CO2CAP.RData"))
+
+summary(scen_CO2CAP)
+scen_CO2CAP@name <- "scen_CO2CAP"
+getData(scen_CO2CAP, "vBalance", comm = "CO2", merge = T) %>%
+  group_by(scenario, comm, year) %>%
+  summarise(value = sum(value))
+
+
+```
+
+
+## Model to test ramping
+```{r, eval=FALSE}
+repo_test <- newRepository("repo") %>%
+  add(
+    # commodities
+    # ELC, COA, CO2, NOX, SOX,
+    repo_comm,
+    # supply & import
+    repo_supply,
+    # Generating technologies
+    ECOA,
+    # EGAS,
+    # CT_EGAS,
+    # ENUC$ENUC_2020,
+    # ENUC,
+    # NO_NEW_NUCLEAR,
+    # EHYD$EHYD_2020,
+    # EHYD,
+    # NO_NEW_HYDRO, # limit on hydro construction
+    # ESOL, WSOL,
+    # EWIN, WWIN,
+    # STG_BTR_2020,
+    # STG_BTR_2030,
+    # STG_BTR,
+    # transmission
+    repo_transmission_existing,
+    # repo_transmission_new,
+    # unserved load
+    UNSERVED,
+    # demand
+    DEMELC_BY
+    # DEMELC_2X
+  )
+# fract_year_adj_repo(subset_hours = SUBSET_HOURS)
+length(repo_test)
+print(repo_test)
+names(repo_test)
+summary(repo_test)
+
+# Adjust annual parameters for partial year solution
+# (temporary solution - until implementation of the method in energyRt)
+# repo <- fract_year_adj_repo(repo, SUBSET_HOURS)
+
+# repo_subset <- subset_slices_repo(repo, SLICE_SUBSET, YDAY_SUBSET)
+
+timetable_ydh <- make_timetable(tsl_levels)
+timetable_yh <- timetable_ydh %>%
+  select(-YDAY) %>%
+  mutate(HOUR = slice)
+
+newCalendar(timetable_yh)
+
+# expand.grid(tsl_levels$YDAY, tsl_levels$HOUR)
+timetable_h <- make_timetable(
+  list(
+    ANNUAL = "ANNUAL",
+    HOUR = paste0("h", formatC(1:8760, width = 4, flag = "0"))
+  )
+)
+newCalendar(timetable_h)
+
+# model-class object
+mod_test <- newModel(
+  name = "IDEEA_r7_test",
+  desc = "IDEEA_test",
+  ## in case of infeasibility, `dummy` variables can be added
+  # debug = data.frame(#comm = "ELC",
+  #                    dummyImport = 1e6,
+  #                    dummyExport = 1e6),
+  region = unique(gis_sf$region),
+  discount = 0.05,
+  # slice = tsl_levels,
+  calendar = newCalendar(timetable_yh),
+  horizon = newHorizon(2030),
+  # yearFraction = list(fraction = FRACT_YEAR),
+  # slice = tsl_sets,
+  repository = repo_test
+)
+
+mod_test@config@horizon
+mod_test@config@calendar@timetable
+
+# inc2 <- "set  mTechRampSliceNext(tech, region, year, slice, slicep);"
+
+GAMS_opt <- GAMS_barrier_crossover
+# GAMS_opt$inc2 <- inc2
+
+scen_test <- interpolate(mod_test, name = "IDEEA_test")
+scen_test@modInp@set$tech
+scen_test@modInp@parameters$tech
+scen_test@modInp@set$trade
+scen_test@modInp@parameters$trade
+scen_test@modInp@parameters$pTradeStock@data
+
+
+scen_test <- write_sc(scen_test,
+  # solver = GAMS_barrier,
+  # solver = GAMS_barrier_cbc,
+  solver = GAMS_barrier_crossover,
+  tmp.dir = file.path("tmp", "GAMS_new_maps_test0")
+)
+
+scen_test <- solve(scen_test, wait = FALSE)
+scen_test@misc$tmp.dir
+
+
+scen_test <- read(scen_test)
+
+# getData(scen_test, "vTechCap", drop.zeros = T, merge = T)
+#
+# vTechCap <- getData(scen_test, c("vTechCap"), drop.zeros = F, merge = T,
+#                     tech_ = "ECOASUP_2020", region = "WEST")
+#
+# vTechAct <- getData(scen_test, c("vTechAct"), drop.zeros = F, merge = T,
+#                     tech_ = "ECOASUP_2020", region = "WEST") %>% arrange(slice) %>%
+#   select(-scenario) %>%
+#   mutate(diff = c(0, diff(value)),
+#          rel_diff = diff / vTechCap$value[1])
+# vTechAct
+# summary(vTechAct$diff) %>% round(3)
+# summary(vTechAct$rel_diff) %>% round(3)
+#
+# hist(vTechAct$diff)
+#
+# scen_test@model@data$repo$ECOASUP_2020@af
+#
+# pSliceShare(slice) * 365 * 24 * pYearFraction(year) / pTechRampDown(tech, region, year, slice)
+#          * pYearFraction(year) * pTechCap2act(tech) * vTechCap(tech, region, year)
+#
+# scen_test@settings@calendar@timetable$share[1]  / #* 365 * 24 /
+#   scen_test@modInp@parameters$pTechRampUp@data$value[1] *
+#   scen_test@modInp@parameters$pTechCap2act@data$value[1] *
+#   vTechCap$value[1]
+
+## Pyomo
+Pyomo$solver <- "cplex"
+scen_test_py <- write_sc(scen_test,
+  # solver = GAMS_barrier,
+  solver = Pyomo,
+  tmp.dir = file.path("tmp", "Pyomo_testmodel_cplex_newtotout0")
+)
+scen_test_py@misc$tmp.dir
+solve(scen_test_py, wait = F)
+
+## Julia
+JuMP
+# JuMP$solver <- "Cbc"
+# JuMP$solver <- "HiGHS"
+JuMP$solver <- "CPLEX"
+scen_test_jl <- write_sc(scen_test,
+  # solver = GAMS_barrier,
+  solver = JuMP,
+  tmp.dir = file.path("tmp", "Julia_testmodel_cplex_newtotout0")
+)
+scen_test_jl@misc$tmp.dir
+solve(scen_test_jl, wait = F)
+
+
+scen_test_glpk <- write_sc(scen_test,
+  # solver = GAMS_barrier,
+  solver = "GLPK",
+  tmp.dir = file.path("tmp", "Pyomo_testmodel_glpk_newtotout")
+)
+scen_test_py@misc$tmp.dir
+solve(scen_test_glpk, wait = F)
+```
+
+
+```{r gams_setup, echo=FALSE}
+# try(source("C:/Users/olugo/Documents/R/revaluation/tmp/gams_config.R"))
+# try(source("tmp/solver_options.R"))
+```
+
+
+## Model with a sample of days (12d x 24h)
+```{r scen_gams, eval=FALSE, echo=T}
+mod@config@horizon
+# mod1 <- setHorizon(mod, 2035:2045, c(1, 2, 5, 5))
+mod_sub <- setHorizon(mod, 2035:2045, c(1, 5, 10, 10, rep(10, 15)))
+mod_sub@config@horizon
+partial_calendar <- newCalendar(timetable_subset, year_fraction = sum(timetable_subset$share))
+scen_sub <- interpolate(
+  mod_sub,
+  CO2_CAP,
+  partial_calendar,
+  name = "IDEEA_toy_sub"
+)
+
+# check added constraints
+scen_sub@modInp@parameters$pCnsRhsCO2_CAP
+scen_sub@modInp@parameters$tech
+scen_sub@modInp@parameters$pCnsRhsNO_NEW_NUCLEAR
+scen_sub@modInp@parameters$pCnsRhsNO_NEW_HYDRO
+# check calendar
+scen_sub@settings@yearFraction
+scen_sub@settings@calendar@timetable
+```
+
+## Solving for a sample days
+(several examples to check which are wokring for you)
+```{r, eval = F}
+# GAMS ####
+scen_gms <- write_sc(
+  scen_sub,
+  solver = GAMS_barrier, # see "solver_options_generic.r" file
+  # solver = GAMS_barrier_cbc,
+  # solver = GAMS_new_maps,
+  tmp.dir = file.path("tmp", "IDEEA_subset_gams2")
+)
+
+scen_gms <- solve(scen_gms, wait = FALSE)
+scen_gms <- read(scen_gms)
+
+# Python + Cbc ####
+# Unclear how to activate barrier in Cbc
+cbc.opt <- # cbc options for GAMS - works
+  {
+    "threads 10
+crossover off
+startalg barrier
+tol_dual 1e-3
+tol_primal 1e-3
+tol_presolve 1e-4"
+  }
+
+Pyomo_cbc_barrier <- Pyomo
+Pyomo_cbc_barrier$files <- list(
+  cbc.opt = cbc.opt,
+  options.txt = cbc.opt
+)
+
+scen_py <- write_sc(scen_sub,
+  solver = Pyomo_cbc_barrier,
+  tmp.dir = file.path(
+    "tmp", "IDEEA_subset",
+    "Pyomo_Cbc_barrier"
+  )
+)
+scen_py <- solve(scen_py, wait = FALSE)
+
+# Solving in Julia ####
+# HiGHS + Barrier is the best options so far from free solvers
+# takes ~2 minutes to solve
+JuMP_HiGHS <- JuMP
+JuMP_HiGHS$solver <- "HiGHS"
+JuMP_HiGHS$inc3 <- c({
+  '# HiGHS options in JuMP/Julia
+# Uncomment options to use
+set_attribute(model, "presolve", "on")
+# set_attribute(model, "time_limit", 3600.0)
+
+# "Barrier" method
+set_attribute(model, "solver", "ipm") # barrier "Interior Point Method"
+set_attribute(model, "ipm_optimality_tolerance", 1e-6) # reducing accuracy
+set_attribute(model, "run_crossover", "off") # polishing the solution
+
+# Simplex
+#set_attribute(model, "solver", "simplex")
+#set_attribute(model, "simplex_strategy", "on")
+
+# Parallel Dual simplex
+#set_attribute(model, "solver", "choose")
+#set_attribute(model, "parallel", "on")
+#set_attribute(model, "threads", 12)
+#set_attribute(model, "simplex_max_concurrency", 8)
+'
+})
+
+scen_jl <- write_sc(scen_sub,
+  solver = JuMP_HiGHS,
+  tmp.dir = file.path("tmp", "IDEEA_subset", "JuMP_HiGHS")
+)
+scen_jl@misc$tmp.dir
+scen_jl <- solve(scen_jl, wait = FALSE)
+
+JuMP_cplex <- JuMP
+JuMP_cplex$solver <- "CPLEX"
+scen_jl <- write_sc(
+  scen_sub,
+  solver = JuMP_cplex,
+  tmp.dir = file.path("tmp", "IDEEA_subset", "JuMP_CPLEX")
+)
+scen_jl@misc$tmp.dir
+scen_jl_cplex <- solve(scen_jl, wait = FALSE)
+scen_jl_cplex <- read_solution(
+  scen_jl,
+  tmp.dir = file.path("tmp", "IDEEA_subset", "JuMP_CPLEX")
+)
+scen_jl_cplex %>% summary()
+
+scen_gms <- read(scen)
+summary(scen_gms)
+
+cbc.opt <- {
+  "threads 10
+  crossover off
+  startalg barrier
+  tol_dual 1e-3
+  tol_primal 1e-3
+  tol_presolve 1e-4"
+}
+
+
+scen_py <- write_sc(scen,
+  # solver = GAMS_barrier,
+  solver = Pyomo,
+  tmp.dir = file.path(
+    "tmp",
+    "Pyomo_cplex_barrier_check_TechOutTot"
+  )
+)
+scen_py@misc$tmp.dir
+solve(scen_py, wait = F)
+
+# }
+summary(scen_gms)
+getData(scen_gms, "vBalance", comm = "CO2", merge = T) %>%
+  group_by(comm, year) %>%
+  summarize(value = sum(value))
+scen_gms@modInp@parameters$pCnsRhsCO2_CAP@data
+
+# save(scen_gms, file = "data-raw/scenarios/scen_gms_reg7_8760h_1y.RData")
+# save(scen_gms,
+# file = "data-raw/scenarios/scen_gms_reg7_8760h_2020-2050.RData")
+```
+
+```{r scen_julia, eval=FALSE,echo=T}
+# solving on Mac or Linux
+solver_jl <- list(
+  cmdline = "/Applications/Julia-1.6.app/Contents/Resources/julia/bin/julia energyRt.jl",
+  lang = "JuMP",
+  # solver = "Cbc"
+  solver = "HiGHS"
+)
+
+scen_jl <- solve(add(mod, CO2_CAP),
+  name = "IDEEA_r7_h288_jl", solver = solver_jl,
+  tmp.dir = file.path("tmp", "JuMP")
+)
+summary(scen_jl)
+
+if (F) {
+  # alternative step-by-step, manual (for lare models)
+  scen <- interpolate(mod, name = "IDEEA_toy", trim = F)
+  scen_jl <- write(scen,
+    solver = solver_jl,
+    tmp.dir = file.path("tmp", "JuMP")
+  )
+  scen_jl@misc$tmp.dir
+  scen_jl <- solve(scen_jl, wait = T)
+  scen_jl <- read(scen_jl)
+  summary(scen_jl)
+}
+summary(scen_jl)
+# scen_jl@misc$time.log
+# save(scen_jl,
+#      file = "data-raw/scenarios/scen_jl_reg7_8760h_2020-2050.RData")
+
+# ```
+#
+# ```{r scen_python, eval=FALSE, echo=T}
+Pyomo <- list(
+  cmdline = "/Users/olmba/Library/r-miniconda-arm64/envs/switch/bin/python energyRt.py",
+  lang = "PYOMO",
+  export_format = "SQLite",
+  # solver = "cplex"
+  # solver = "glpk"
+  solver = "cbc"
+  # solver = "highs"
+)
+
+scen <- interpolate(add(mod, CO2_CAP),
+  name = "IDEEA_toy", trim = F
+)
+scen_py <- write(scen,
+  solver = Pyomo,
+  tmp.dir = file.path("tmp", "Pyomo")
+)
+scen_py@misc$tmp.dir
+
+scen_py <- solve(scen_py, wait = T)
+scen_py <- read(scen_py)
+summary(scen_py)
+```
+
+```{r, eval=FALSE}
+scen_glpk <- solve(mod,
+  name = "IDEEA_r7_h288_glpk",
+  solver = "GLPK",
+  tmp.dir = file.path("tmp", "GLPK")
+)
+summary(scen_glpk)
+```
+
+
+
+## Results
+```{r, eval=FALSE}
+drop_vintage <- function(x) {
+  sub("_[0-9]+$", "", x)
+}
+
+drop_process_vintage <- function(x) {
+  x %>% mutate(process = drop_vintage(process))
+}
+
+# scen <- list(gms = scen_gms, jl = scen_jl)
+# scen <- scen_jl
+scen <- scen_gms
+vTechCap <- getData(scen,
+  "vTechCap",
+  merge = T, drop.zeros = T,
+  process = T
+) %>%
+  drop_process_vintage() %>%
+  group_by(scenario, process, region, year) %>%
+  summarise(value = sum(value), .groups = "drop")
+
+vNewCap <-
+  getData(scen, name_ = "New", merge = T, process = T, drop.zeros = T) %>%
+  drop_process_vintage() %>%
+  group_by(scenario, process, region, year) %>%
+  summarise(value = sum(value), .groups = "drop")
+
+getData(scen, name_ = "NewCap", merge = F, drop.zeros = T)
+# getData(scen, name_ = "Trade", merge = F, drop.zeros = T)
+getData(scen, name_ = "TradeNew", merge = F, drop.zeros = T)
+getData(scen,
+  name_ = "Storage", merge = F, drop.zeros = T,
+  parameters = F, digits = 3
+)
+
+getData(scen, name = "vImportRow", parameters = F, merge = T, drop.zeros = T) %>% as.data.table()
+
+vTechCap_sf <- gis_sf %>%
+  filter(!offshore) %>%
+  left_join(vTechCap, by = c(reg_off = "region"))
+
+ggplot(vTechCap_sf) +
+  geom_sf(aes(fill = value), na.rm = F) +
+  scale_fill_viridis_c(option = "H", name = "GW") +
+  facet_grid(year ~ process) +
+  theme_bw()
+
+vNewCap_sf <- gis_sf %>%
+  filter(!offshore) %>%
+  left_join(select(vNewCap, -any_of("name")),
+    by = c(reg_off = "region")
+  ) %>%
+  filter(!is.na(value))
+st_drop_geometry(vNewCap_sf) %>% as.data.table()
+
+ggplot(vNewCap_sf) +
+  geom_sf(data = gis_sf, na.rm = F) +
+  geom_sf(aes(fill = value), na.rm = F) +
+  scale_fill_viridis_c(option = "H", name = "GW") +
+  facet_grid(process ~ year) +
+  theme_bw()
+```
+
+```{r}
+getData(scen, "vBalance", comm = "CO2", merge = T) %>%
+  group_by(scenario, year) %>%
+  summarise(CO2 = sum(value))
+
+getData(scen, parameters = T, variables = F, comm = "CO2", merge = F)
+scen@modInp@parameters$pCnsRhsCO2_CAP
+
+getData(scen, name_ = "CO2_CAP")
+```
+
+```{r}
+vTechOut <- getData(scen,
+  "vTechOut",
+  comm = "ELC",
+  merge = T, drop.zeros = T,
+  process = T
+) %>%
+  drop_process_vintage() %>%
+  group_by(scenario, name, process, year) %>%
+  summarize(
+    GWh = sum(value, na.rm = T),
+    .groups = "drop"
+  )
+
+ggplot(vTechOut) +
+  geom_bar(aes(year, GWh, fill = process), stat = "identity")
+facet_wrap(~region)
+
+
+getData(scen, "pDemand", merge = T) %>%
+  group_by(scenario, dem, year) %>%
+  summarise(value = sum(value))
+```
+
+```{r}
+vCap <- getData(scen,
+  name_ = "New",
+  # "vTechCap",
+  merge = T, drop.zeros = T,
+  process = T
+) %>%
+  drop_process_vintage() %>%
+  group_by(scenario, name, process, year) %>%
+  summarize(
+    GW = sum(value, na.rm = T),
+    .groups = "drop"
+  )
+
+ggplot(vCap) +
+  geom_bar(aes(year, GW, fill = process), stat = "identity")
+facet_wrap(~region)
+
+
+getData(scen, "pDemand", merge = T) %>%
+  group_by(scenario, dem, year) %>%
+  summarise(value = sum(value))
+```
+
+
+
+compare gms jl py
+```{r, eval=FALSE}
+sns <- list(
+  GAMS = scen_gms,
+  Julia = scen_jl,
+  Pyomo = scen_py
+  # ,GLPK = scen_glpk
+)
+
+getData(sns, "vObjective", merge = T) %>% as.data.table()
+# save(sns, file = "tmp/four_identical_solutions.RData")
+
+comp <- lcompare(scen_gms@modInp@parameters, scen_jl@modInp@parameters)
+class(comp)
+length(comp)
+names(comp)
+comp[1]
+
+getData(sns,
+  name_ = "NewCap", merge = T, process = T,
+  digits = 2, drop.zeros = T
+) %>%
+  pivot_wider(names_from = "scenario") %>%
+  select(-name) %>%
+  as.data.table()
+save(sns, file = "tmp/ramp_debug_gms_py_jl.RData")
+```
+
+check rampup and rampdown
+```{r, eval=FALSE}
+scen <- scen_py
+scen <- scen_gms
+
+x <- getData(scen,
+  name = "vTechOut", comm = "ELC", tech = "ECOAULT_2020",
+  merge = T, region = "EAST", year = 2020
+) %>%
+  arrange(slice) %>%
+  as.data.table()
+x
+plot(x$value, type = "l")
+ggplot(x) +
+  geom_step(aes(x = slice, y = value, group = 1),
+    alpha = .2, linewidth = .25
+  ) +
+  geom_point(aes(x = slice, y = value), size = .2) +
+  labs(y = "vTechOut") +
+  facet_wrap(~scenario, ncol = 1, scales = "free_y")
+ggsave("ramp_debug_gms_py_jl.png", height = 8, width = 6, path = "tmp")
+```

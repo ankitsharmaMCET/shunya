@@ -1,0 +1,1128 @@
+---
+title: "IDEEA model R-package development, step-by-step"
+author: '@IDEEA'
+date: "3/29/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+```{r}
+
+```
+
+
+
+The goal if this file is to document the process of creation of the IDEEA model package. Steps:  
+
+*2023-08-01..+*
+
+## Technologies with costs
+```{r}
+library(tidyverse)
+f <- "data-raw/Data Generation_and_Storage_of_ElectricityExcel.xlsx"
+sheets <- readxl::excel_sheets(f)
+
+s <- sheets[2]
+readxl::read_excel(f, s, "B4:F43") %>% rename(parameter = `...1`) %>%
+  filter(!is.na(`2020`) | !is.na(`2030`) | !is.na(`2040`) | !is.na(`2050`)) %>%
+  filter(!grepl("Gross Heat", parameter, ignore.case = T)) %>%
+  filter(!grepl("Startup cost", parameter, ignore.case = T))
+  as.data.table()
+
+```
+
+```{r}
+# transmission_5x5 <- googlesheets4::read_sheet(
+#   "https://docs.google.com/spreadsheets/d/1LF6aBkFF0o3tq-9l5OglL8A4eukG_en2pVQS7VKb23c/edit#gid=1904567822",
+#   "transmission_5x5",
+#   skip = 1
+# )
+# 
+# transmission_5x5 <- transmission_5x5 %>%
+#   pivot_longer(cols =  3:ncol(x), names_to = "dst", values_to = "MW") %>%
+#   filter(!is.na(MW))
+# 
+# 
+# save(transmission_5x5, file = "data-raw/googlesheets/transmission_5x5.RData")
+
+```
+
+
+
+*2023-07-17..21*
+* WRI power plants data  
+  + 
+
+* write-up requests:
+  describe coal (oil/gas/...) resources:   
+  * 1-2 paragraphs with importance of coal for Indian economy   
+  * locations of the main deposits and mines   
+  * export and import of coal (which regions, mines, types of coal)  
+  * historical prices (by region/source)  
+  * elaboration on unexplored resources  
+  * link to environmental impact (air, water, land)  
+  [references]
+
+## WRI - select India data  
+```{r}
+library(tidyverse)
+library(sf)
+(load("data-raw/wri.RData"))
+gis_sf <- IDEEA.dev:::ideea_map %>%
+  filter(!is.na(reg46)) %>% 
+  mutate(
+    region = reg46,
+    reg_off = if_else(offshore, paste0(reg46, "_off"), reg46), 
+    .before = 1)
+# gis_sf <- get_ideea_map(nreg = 46, offshores = T, islands = T) %>% 
+#   mutate(region = reg46, .before = 1)
+
+
+gis_sf$offshore %>% summary()
+gis_sf[is.na(gis_sf$offshore),]
+gis_sf$reg_off
+# gis_sf <- IDEEA.dev::get_ideea_map(34, offshores = T, islands = T)
+
+w <- wri %>% filter(country == "IND")
+# w$latitude %>% summary()
+wri_sf <- st_as_sf(w, coords = c("longitude", "latitude")) %>%
+  st_set_crs(st_crs(gis_sf))
+
+x <- st_within(wri_sf, gis_sf, sparse = F)
+# x <- st_intersects(wri_sf, gis_sf)
+# x
+class(x); dim(x)
+x <- apply(x, 1, which.max)
+summary(x)
+length(x); dim(w)
+summary(unlist(x)); dim(gis_sf)
+
+wri_sf %>% class()
+wri_sf <- wri_sf %>% 
+  mutate(
+    reg_off = gis_sf$reg_off[unlist(x)],
+    .before = 1
+  )
+
+ii <- gis_sf$reg_off %in% unique(wri_sf$reg_off)
+summary(ii); unique(gis_sf$reg_off[ii])
+gis_sf[!ii, 1] %>% plot()
+na <- wri_sf %>% filter(is.na(reg_off))
+
+# plot(gis_sf[1], col = "grey", reset = F)
+# plot(na[1], col = "red", add = T)
+# st_nearest_feature(na, gis_sf)
+
+gis_sf %>%
+  left_join(
+    st_drop_geometry(wri_sf),
+    by = "reg_off"
+  )
+
+wri_sf <- wri_sf %>%
+  left_join(
+    st_drop_geometry(gis_sf),
+    by = "reg_off"
+  )
+save(wri_sf, file = "data-raw/wri_sf.RData")
+
+wri_sf$other_fuel1 %>% unique()
+wri_sf$other_fuel2 %>% unique()
+wri_sf$other_fuel3 %>% unique()
+
+wri_reg46 <- wri_sf %>% 
+  st_drop_geometry() %>%
+  group_by(reg_off, primary_fuel, mainland, offshore,
+           across(matches("reg"))) %>%
+  summarise(
+    commissioning_year = mean(as.numeric(commissioning_year), 
+                              na.rm = T) %>% round(),
+    year_of_capacity_data = mean(as.numeric(year_of_capacity_data), 
+                                 na.rm = T) %>% round(),
+    capacity_mw = sum(capacity_mw, na.rm = T),
+    generation_gwh_2013 = sum(generation_gwh_2013, na.rm = T),
+    generation_gwh_2014 = sum(generation_gwh_2014, na.rm = T),
+    generation_gwh_2015 = sum(generation_gwh_2015, na.rm = T),
+    generation_gwh_2016 = sum(generation_gwh_2016, na.rm = T),
+    generation_gwh_2017 = sum(generation_gwh_2017, na.rm = T),
+    generation_gwh_2018 = sum(generation_gwh_2018, na.rm = T),
+    generation_gwh_2019 = sum(generation_gwh_2019, na.rm = T),
+    generation_gwh_max = max(generation_gwh_2013, generation_gwh_2014,
+                             generation_gwh_2015, generation_gwh_2016,
+                             generation_gwh_2017, generation_gwh_2018,
+                             generation_gwh_2019, na.rm = T),
+    .groups = "drop"
+  ) %>%
+  as.data.table()
+wri_reg46$primary_fuel %>% unique()
+
+save(wri_reg46, file = "data-raw/wri_reg46.RData")
+
+```
+
+## Loadcurve
+```{r}
+reg_tbl <- IDEEA.dev::ideea_data$reg_tbl %>% 
+  filter(!is.na(reg36), !offshore) %>% unique()
+
+if (!file.exists("data-raw/load_2019.RData")) {
+  x <- readxl::read_excel("data-raw/Dem_2019.xlsx", range = "B3:LXZ35")
+  names(x) <- c("reg36", tsl_d365_h24$tsl_sets$slice)
+  all(x$reg36 %in% reg_tbl$reg36) # check - all TRUE
+  
+  
+  load_2019 <- x %>% 
+    pivot_longer(cols = starts_with("d"), names_to = "slice", 
+                 values_to = "MWh") %>%
+    left_join(
+      unique(
+        select(reg_tbl, reg36, reg7)), by = "reg36"
+      )
+  save(load_2019, file = "data-raw/load_2019.RData")    
+} else {
+  (load("data-raw/load_2019.RData"))
+}
+
+# filter outliers
+load_2019 <- load_2019 %>%
+  mutate(
+    datetime = timeslices::tsl2dtm(slice, tmz = "Asia/Kolkata", year = 2019),
+    MONTH = timeslices::tsl2month(slice),
+    YDAY = timeslices::tsl2yday(slice),
+    HOUR = timeslices::tsl2hour(slice),
+    .after = "slice"
+  )
+
+load_2019_summary <- load_2019 %>% 
+  # ungroup() %>%
+  group_by(reg36, reg7) %>%
+  summarize(mean_MWh = mean(MWh), sd_MWh = sd(MWh), .groups = "drop")
+load_2019_summary$mean_MWh %>% unique() %>% length()
+
+n_sd <- 3
+load_2019_clean <- load_2019 %>%
+  left_join(load_2019_summary) %>%
+  # rowwise() %>%
+  mutate(
+    # MWh_clean = ifelse(MWh > mean_MWh + n_sd * sd_MWh,
+    #                     mean_MWh + n_sd * sd_MWh,
+    #                     if_else(MWh < mean_MWh - n_sd * sd_MWh,
+    #                             mean_MWh - n_sd * sd_MWh,
+    #                             mean_MWh)
+    #                     ),
+    MWh_outlier = if_else(abs(MWh - mean_MWh) > n_sd * sd_MWh, TRUE, FALSE)
+  ) %>% 
+  mutate(
+    MWh_clean = if_else(MWh_outlier, mean_MWh, MWh)
+  ) %>%
+  as.data.table()
+# dx <- diff(c(load_2019_clean$MWh, load_2019_clean$MWh[1])) / load_2019_clean$sd_MWh
+# summary()
+load_2019_clean
+load_2019_clean$MWh_outlier %>% summary()
+  
+
+ggplot(load_2019_clean) +
+  geom_line(aes(HOUR, MWh_clean/1e3, color = YDAY, group = YDAY), alpha = .25) +
+  scale_color_viridis_c(option = "H", limits = c(1, 365)) +
+  geom_line(aes(HOUR, MWh_clean/1e3, color = YDAY, group = YDAY), alpha = .25) +
+  facet_wrap(~reg36, ncol = 4, scales = "free_y") +
+  labs(y = "GWh", x = "hour") +
+  theme_bw()
+
+
+load_2019_clean %>%
+  mutate(MWh = MWh_clean) %>%
+  select(
+    any_of(c("reg36", "reg7", "datetime", "slice", "MWh"))
+  )
+save(load_2019_clean, file = "data-raw/load_2019_clean.RData")
+```
+
+
+## Time slices (internal)
+```{r}
+tsl_d365_h24 <- list(
+  tsl_levels = list(ANNUAL = "ANNUAL", timeslices::tsl_levels$d365_h24),
+  tsl_sets = mutate(
+    timeslices::tsl_sets$d365_h24,
+    slice = paste(YDAY, HOUR, sep = "_")
+  )
+)
+save(tsl_d365_h24, file = "data-raw/tsl_d365_h24.RData")
+tsl_d365_h24$tsl_sets
+tsl_d365_h24$tsl_levels
+
+```
+
+
+*2023-07-10..12:*  
+* rebuilding maps-objects
+  + dropping `sp` format (since it is based on the )
+  + using GWA offshore areas, split/assign the areas using Voronoi algo..
+  + keep regional splits: 36, 34, (32?), 7, 5 regions and 1 (national)
+  + all maps have offshore area
+  + ROW is a separate map in ... CRS/projection
+* add regions-mapping table (start from 46, 36, ...)
+* connect inputs from Google-Sheets, imported:
+  + Wind
+  + Solar
+  + Gas
+  + Coal
+  + Lignite
+  missing:
+  - CCS
+  - 
+* add transmission table for every map/aggregation
+  + 5 & 7 r
+  - 36
+  - 34
+  - 32
+* capacity from WRI
+* added correlation-based clusters for wind and solar
+  + 36 region w/offshore
+* adding dependencies (see below and `desc`)
+
+## redoing all maps
+(see also `data-raw/DATASET.R`)
+(see also `get_ideea_map` function in `R/data.R`)
+```{r, eval=FALSE}
+# the script is a log of changes - do not rerun
+library(tidyverse)
+library(sf)
+(load("data-raw/maps/ideea_r36o13.RData"))
+(load("data-raw/maps/india_r46_sf.RData"))
+ideea_r36o13
+india_r46_sf
+
+# create 37 region columns (split Daman & Diu) and save
+if (F) { # (done - do not rerun)
+  india_r46_sf <- india_r46_sf %>% 
+    mutate(
+      reg37 = if_else(reg46 %in% c("DM", "DU"), reg46, reg36),
+      name37 = if_else(reg46 %in% c("DM", "DU"), name46, name36),
+      .before = "reg36")
+  save(india_r46_sf, file = "data-raw/maps/india_r46_sf.RData")
+}
+
+
+# create/save 37 region map with offshores 
+# split offshore areas - ToDo later (!!!)
+ideea_r36o13[ideea_r36o13$offshore, "reg36_off"] %>% plot()
+ideea_r36o13$reg36_off %>% unique()
+
+# split offshore regions (o13) to unique polygons
+x <- ideea_r36o13[ideea_r36o13$offshore, "reg36_off"] %>% st_cast("POLYGON")
+x <- x %>% mutate(n = as.factor(1:n())) 
+x %>% select(n) %>% 
+  plot(border = NA, axes = T, reset = F)
+plot(x[3,], col = "red", border = "red", add = T, lwd = 4)
+x %>% st_area() %>% as.numeric()/1e9
+
+ii <- st_nearest_feature(india_r46_sf$geometry, x$geometry)
+cc <- st_distance(india_r46_sf$geometry, x$geometry)
+Rfast::rowMins(cc)
+mm <- Rfast::colMins(cc)
+
+# dd <- st_distance(x$geometry, india_r46_sf$geometry)
+# dim(dd)
+# rm <- Rfast::rowMins(dd)
+# cm <- Rfast::colMins(dd)
+
+# x$reg36_off
+# india_r46_sf$reg46[rm]
+
+# i <- 1
+x$reg46 <- ""
+india_r46_sf$n <- as.integer(NA)
+for (i in 1:18) { # repeat for i in 1:18
+  message(i)
+  if (i == 4) mm[i] <- 35
+  if (i == 8) mm[i] <- 9
+  if (i == 13) mm[i] <- 33
+  if (i == 14) {
+    message(i, " several maches.. 37, 39, 43, assigning the first value")
+    # !!! mm[i] <- c(37, 39, 43)
+    mm[i] <- c(37) #, 39, 43
+  } 
+  # i <- 18 - ok
+  plot(x["n"], reset = F)
+  # plot(x[i, "n"], reset = F)
+  plot(x$geometry[i], add = T, border = "red", lwd = 3)
+  plot(india_r46_sf$geometry[mm[i]], add = T, col = "red")
+  # plot(india_r46_sf$geometry[43], add = T, col = "blue", border = "blue", lwd = 3)
+  # assign if correct
+  x$reg46[i] <- india_r46_sf$reg46[mm[i]]
+  # x$reg46[i] <- paste(x$reg46[i], india_r46_sf$reg46[mm[i]], sep = ",")
+  india_r46_sf$n[mm[i]] <- mm[i]
+  # i <- i + 1
+}
+
+on_r46 <- india_r46_sf %>% select(1:mainland) %>%
+  mutate(offshore = F, .after = "mainland")
+off_r46 <- x %>% select(reg46, geometry) %>%
+  group_by(reg46) %>% summarise() %>% # combine split polygons of the same region
+  left_join(st_drop_geometry(on_r46)) %>%
+  mutate(offshore = T) %>%
+  select(all_of(names(on_r46))) 
+ideea_r46 <- rbind(on_r46, off_r46) 
+unique(ideea_r46$reg46)
+summary(ideea_r46$offshore)
+# ideea_r46o15_sf <- ideea_r46
+ideea_r46 <- ideea_r46 %>%
+  mutate(
+    reg1 = "IND", name1 = "India", .before = "mainland"
+  )
+
+plot(ideea_r46[1])
+plot(ideea_r46["reg37"])
+plot(ideea_r46["reg36"])
+plot(ideea_r46["reg34"])
+plot(ideea_r46["reg32"])
+plot(ideea_r46["reg7"])
+plot(ideea_r46["reg5"])
+plot(ideea_r46["reg1"])
+
+ideea_r46o15_sf <- ideea_r46
+dim(ideea_r46o15_sf)
+save(ideea_r46o15_sf, file = "data-raw/maps/ideea_r46o15_sf.RData")
+
+IDEEA.dev::ideea_maps$ROW
+```
+
+## sf and other dependencies
+```{r}
+usethis::use_package("sf", type = "depends")
+usethis::use_package("dplyr")
+usethis::use_pipe()
+usethis::use_import_from("glue", c("glue"))
+
+```
+
+*2023-06-07:*  
+* adding `growth` article   
+* structure of `energy` article   
+* re-arranging articles menu (see `_pkgdown.yml`)   
+* adding transmission network templates to google-doc  
+
+```{r}
+usethis::use_article("growth", "Growth and demand scenarios")
+
+```
+
+*2023-06-27:*  
+* import functions from Google Sheets (in progress)
+* adding `india_r36_sf` (see the script below)
+```{r, eval=FALSE}
+load("data-raw/maps/india_r46_sf.RData")
+india_r36_sf <- india_r46_sf %>%
+  group_by(reg36, name36) %>%
+  summarise(
+    geometry = globalwindatlas:::gwa_union_polygons(geometry, grid_size = 0),
+    .groups = "drop"
+  )
+india_r36_sf
+plot(india_r36_sf[1])
+
+save(india_r36_sf, file = "data-raw/maps/india_r36_sf.RData")
+
+# add offshore areas (from GWA)
+library(globalwindatlas)
+library(terra)
+gwa_get_dir()
+gwa_set_dir("../globalwindatlas/data/gwa")
+gwa_tif <- gwa_get_wind_cf("IND")
+gwa_rast <- rast(gwa_tif)
+gwa_vc <- gwa_rast %>% terra::as.polygons() %>%
+          terra::makeValid() %>% terra::aggregate()
+plot(gwa_vc)
+gwa_sf <- st_as_sf(gwa_vc)
+
+row_sf <- IDEEA.dev::ideea_maps$ROW$ROW$sf
+# row_buf_sf <- st_buffer(row_sf, .01, nQuadSegs = 300, endCapStyle = "ROUND")
+row_buf_sf <- vect(row_sf) %>% terra::buffer(width = 1e4) %>% st_as_sf() %>%
+  st_make_valid()
+# plot(row_buf_sf)
+plot(row_buf_sf[1], reset = F, col = "red")
+plot(row_sf[1], add = T)
+
+offshore_sf <- st_difference(gwa_sf, st_union(india_r36_sf)) %>% 
+  st_make_valid() %>% globalwindatlas:::gwa_union_polygons()
+offshore_sf <- st_difference(offshore_sf, st_make_valid(st_union(row_sf))) %>%
+  globalwindatlas:::gwa_union_polygons()
+offshore_sf <- st_difference(st_make_valid(offshore_sf),
+                             st_make_valid(st_union(row_buf_sf$geometry))) 
+offshore_sf %>% plot(col = "red")
+st_bbox(offshore_sf)
+
+bx <- matrix(c(60, 20, 75, 20, 75, 28, 60, 28, 60, 20), ncol = 2, byrow = T)
+bx_sf <- st_polygon(x = list(bx)) %>% st_sfc() %>% st_as_sf() %>% 
+  st_set_crs(st_crs(offshore_sf))
+
+st_snap(offshore_sf, bx_sf)
+
+smoothr::drop_crumbs(offshore_sf, 1e8) %>% plot()
+
+offshore_sf <- smoothr::drop_crumbs(offshore_sf, 1e8)
+st_bbox(offshore_sf)
+save(offshore_sf, file = "data-raw/maps/offshore_sf.RData")
+
+gis34_sf <- IDEEA.dev::ideea_maps$r34$with_offshores$sf
+gwa_off_sf <- offshore_sf %>% st_as_sf %>% st_transform(st_crs(gis34_sf))
+
+gis34_sf[1] %>% plot(col = NA, border = "blue")
+gwa_off_sf %>% plot(col = NA, border = "red", add = T)
+
+# library(tidyverse)
+ggplot() +
+  geom_sf(data = gis34_sf) +
+  geom_sf(data = gwa_off_sf, fill = NA, color = "red")
+
+# regionalize 
+a <- st_transform(india_r36_sf, 32614) # crs may also affect results
+# a <- st_transform(gis34_sf, 32722)
+plot(a[1], axes = T)
+
+library(cartomisc)
+b <- regional_seas(a, "reg36", dist = units::set_units(300, km), 
+                   # adjust and repeat several times (results depend on sampling)
+                   # to get desirable outcome
+                   density = units::set_units(0.05, 1/km) 
+                   ) %>%
+  st_transform(st_crs(gwa_off_sf))
+plot(b[1])
+
+d <- st_intersection(gwa_off_sf, st_make_valid(b)) %>% 
+  st_make_valid(s2_options = s2::s2_options(snap = s2::s2_snap_precision(0), ...))
+plot(d)
+ 
+#
+off_36_sf <- st_transform(d, st_crs(gis34_sf)) %>% st_make_valid() %>%
+  rename(geometry = x) %>% mutate(offshore = TRUE, .before = "geometry")
+land_36_sf <- st_transform(india_r36_sf, st_crs(gis34_sf)) %>% 
+  st_make_valid() %>% mutate(offshore = FALSE, .before = "geometry") %>%
+  select(-name36)
+
+
+x <- st_difference(off_36_sf, land_36_sf) %>% select(reg36, offshore, geometry)
+
+(load("~/R/IDEEA.dev/data-raw/maps/india_r46_sf.RData"))
+y <- st_drop_geometry(india_r46_sf) %>% select(reg36, name36) %>% unique()
+ii <- !(y$reg36 %in% land_36_sf$reg36)
+y$reg36[ii]
+
+# x <- x %>%
+st_is_valid(x) %>% all()
+plot(x[1])
+off_36_sf <- x
+
+gis_36_off <- rbind(land_36_sf, off_36_sf)
+gis_36_off <- gis_36_off %>% left_join(y) %>% 
+  select(reg36, name36, offshore, geometry) %>%
+  mutate(
+    reg36_off = if_else(offshore, paste0(reg36, "_off"), reg36),
+    .after = "offshore"
+  )
+
+plot(gis_36_off[1])
+plot(gis_36_off["reg36_off"])
+
+# library(ggplot2)
+g <- ggplot(gis_36_off) +
+  geom_sf(aes(fill = reg36), color = alpha("black", .25)) +
+  scale_fill_viridis_d(option = "H") +
+  theme_bw()
+ggsave("tmp/gis_36_off.png", plot = g, scale = 2, width = 7, height = 8)
+
+ideea_r36o13 <- gis_36_off
+save(ideea_r36o13, file = "data-raw/maps/ideea_r36o13.RData")
+
+# g <- ggplot(gis_36_off) +
+#   geom_sf(aes(fill = reg36), color = alpha("black", .25)) +
+#   scale_fill_viridis_d(option = "H") +
+#   theme_bw()
+# ggsave("tmp/gis_36_off.png", plot = g, scale = 2, width = 7, height = 8)
+
+
+# globalwindatlas:::gwa_union_polygons
+
+# # split-area regions
+# ii <- sapply(india_r36_sf$geometry, function(x) inherits(x, "MULTIPOLYGON"))
+# summary(ii)
+# 
+# x <- india_r36_sf[ii,]
+# x
+# 
+# plot(india_r36_sf[1], reset = F, color = NA)
+# plot(x[x$reg36 == "PY", 1], axes = T, add = T, color = "red")
+
+
+```
+
+
+*2023-05-01:*  
+* arranging articles menu (see `_pkgdown.yml`)   
+* adding `ccus` article   
+* adding `energy` article   
+* `team.Rmd` renamed to `about.Rmd`   
+* Google sheets, model input data: 
+<https://docs.google.com/spreadsheets/d/1LF6aBkFF0o3tq-9l5OglL8A4eukG_en2pVQS7VKb23c/edit?usp=sharing>
+
+
+```{r}
+usethis::use_article("ccus", "Carbon capture, utilisation and storage")
+usethis::use_article("energy", "Energy supply and trade")
+
+```
+
+
+
+*2023-04-19:*  
+* ideea_r46_sf map is saved in the package internal files   
+* logo added   
+* website drafted   
+* license changed to AGPL-3   
+* + iron and steel sector
+* + data article
+* + 
+
+
+```{r}
+# IDEEA.dev::ideea_maps
+library(sf)
+(load("data-raw/maps/india_r46_sf.RData"))
+plot(india_r46_sf["reg46"])
+usethis::use_data(india_r46_sf, internal = TRUE)
+
+# logo: "man/figures/logo.png"
+# favicons (https://pkgdown.r-lib.org/reference/build_home.html):
+# see pkgdown/favicon/
+pkgdown::init_site()
+usethis::use_agpl3_license()
+usethis::use_vignette("iron_steel", "Iron and Steel sector")
+usethis::use_article("install", "Installation")
+usethis::use_article("team", "IDEEA team and community")
+usethis::use_article("data", "IDEEA model open datasets")
+usethis::use_r("data")
+
+```
+
+
+
+*2023-03-29:* 
+* added LHDV to `transportation`  
+* added `Karnataka` document (empty)   
+
+```{r}
+usethis::use_article("karnataka")
+
+```
+
+
+*2023-03-22:* 
+* added `electricity` vignette // alternative name `power_sector`   
+* added `hydrogen` vignette  
+* added `transportation` vignette  
+* added `buildings` vignette   
+
+The website/package structure:  
+vignettes: the model modules  
+articles: desc/details on how data and/or particular modules have been assembled/processed  
+
+```{r}
+usethis::use_vignette("electricity")
+usethis::use_vignette("hydrogen")
+usethis::use_vignette("transportation")
+usethis::use_vignette("buildings")
+
+```
+
+
+*2023-03-15:* 
+* Updated `winddata` article with an example 
+
+
+*2023-03-01:* 
+* Adding the website using `pkgdown` tools   
+https://pkgdown.r-lib.org/ 
+```{r, eval=FALSE}
+# log/reference only, no need to rerun
+# usethis::use_pkgdown(config_file = "_pkgdown.yml", destdir = "docs")
+usethis::use_pkgdown()
+# to build the website
+devtools::build_readme()
+# library(pkgdown)
+# pkgdown::clean_site()
+# options(rmarkdown.html_vignette.check_title = FALSE)
+# devtools::install(build_vignettes = TRUE)
+pkgdown::build_site()
+```
+* Adding `dev/build.Rmd` to build or further edit the manual website.
+
+
+*2023-02-27:* 
+Renaming names of regions.  
+(already don, the code is for reference)  
+
+_renaming rules:_  
+ideea_1r -> ideea_r1        # one region
+ideea_5r3 -> ideea_r5o3     # 5 land and 3 offshore regions
+ideea_7r_off -> deea_r7o5   # 7 land and 5 offshore regions
+
+```{r, eval=FALSE}
+library(sp)
+library(sf)
+library(stringr)
+library(tidyverse)
+# list all files
+pth <- "data-raw/maps"
+fls <- list.files(pth, pattern = "^ideea", full.names = F)
+# rename initial files to delete later
+for (i in 1:length(fls)) {
+  file.rename(file.path(pth, fls[i]), file.path(pth, paste0("_", fls[i])))
+}
+
+# list files to rename them
+fls <- list.files(pth, pattern = "^_ideea", full.names = T)
+# i <- 2
+for (i in 1:length(fls)) {
+  cat(basename(fls[i]))
+  (ff <- load(fls[i]))
+  # f <- ff[1]
+  nms <- ""
+  for (j in 1:length(ff)) {
+    mp <- get(ff[j])
+    nr <- str_extract(ff[j], pattern = "[0-9]+r") %>% str_replace("r", "") # number of regions
+    ni <- str_extract(ff[j], pattern = "ri") %>% str_replace("r", "") # number of regions
+    no <- str_extract(ff[j], pattern = "r[0-9]+") %>% str_replace("r", "") # number of offshore
+    off <- str_extract(ff[j], pattern = "off") # offshore
+    try({id <- if_else(!is.null(mp$locid), "_locid", "")}, silent = T)
+    if (inherits(id, "try-error")) id <- ""
+    if (!is.na(off) & is.na(no)) {
+      no <- length(unique(mp$reg_off[grepl("off", mp$reg_off)]))
+    }
+    rw <- str_extract(ff[j], pattern = "row") # rest of the world
+    cl <- str_extract(ff[j], pattern = "sf$|sp$") # class of the object
+    nn <- "ideea" # new name
+    if (!is.na(nr)) nn <- paste0(nn, "_r", nr) # new name
+    if (!is.na(ni)) nn <- paste0(nn, "i")
+    if (!is.na(no)) nn <- paste0(nn, "o", no)
+    nn <- paste0(nn, id)
+    if (!is.na(rw)) nn <- paste0(nn, "_row")
+    fname <- paste0(nn, ".RData")
+    nn <- paste0(nn, "_", cl)
+    nms[j] <- nn
+    assign(nn, get(ff[j]))
+    rm(mp)
+  }
+  cat(" -> ", fname, "\n")
+  stopifnot(!file.exists(file.path(pth, fname)))
+  save(list = nms, file = file.path(pth, fname))
+}
+unlink(fls)
+(load("data-raw/maps/_india_46r_sf.RData"))
+india_r46_sf <- india_46r_sf
+save(india_r46_sf, file = "data-raw/maps/india_r46_sf.RData")
+unlink("data-raw/maps/_india_46r_sf.RData")
+
+```
+
+_ideea_1r.RData ->  ideea_r1.RData 
+_ideea_1ri.RData ->  ideea_r1i.RData 
+_ideea_32r.RData ->  ideea_r32.RData 
+_ideea_32r_off.RData ->  ideea_r32o11_locid.RData 
+_ideea_32r_row.RData ->  ideea_r32_row.RData 
+_ideea_32r11.RData ->  ideea_r32o11.RData 
+_ideea_34r.RData ->  ideea_r34.RData 
+_ideea_34r_off.RData ->  ideea_r34o12_locid.RData 
+_ideea_34r_row.RData ->  ideea_r34_row.RData 
+_ideea_34r11.RData ->  ideea_r34o11.RData 
+_ideea_5r.RData ->  ideea_r5.RData 
+_ideea_5r_off.RData ->  ideea_r5o3_locid.RData 
+_ideea_5r3.RData ->  ideea_r5o3.RData 
+_ideea_7r.RData ->  ideea_r7.RData 
+_ideea_7r_off.RData ->  ideea_r7o5_locid.RData 
+_ideea_7r5.RData ->  ideea_r7o5.RData 
+_ideea_row.RData ->  ideea_row.RData 
+
+```{r, eval=FALSE}
+ideea_maps <- list(
+  "r1" = list(
+    "mainland" = 
+      list(
+        "sf" = ideea_r1_sf,
+        "sp" = ideea_r1_sp),
+    "with_islands" = 
+      list(
+        "sf" = ideea_r1i_sf,
+        "sp" = ideea_r1i_sp)
+      )
+  )
+
+# 5 regions ####
+(load("data-raw/maps/ideea_r5.RData"))
+plot(ideea_r5_sf[1])
+
+(load("data-raw/maps/ideea_r5o3_locid.RData"))
+plot(ideea_r5o3_locid_sf[1])
+
+ideea_maps[["r5"]] <- list(
+    "land" = 
+      list(
+        "sf" = ideea_r5_sf,
+        "sp" = ideea_r5_sp),
+    "with_offshores" = 
+      list(
+        "sf" = ideea_r5o3_locid_sf,
+        "sp" = ideea_r5o3_locid_sp)
+      )
+names(ideea_maps)
+names(ideea_maps$`r5`$with_offshores)
+
+# 7 regions ####
+(load("data-raw/maps/ideea_r7.RData"))
+plot(ideea_r7_sf[1])
+
+(load("data-raw/maps/ideea_r7o5_locid.RData"))
+plot(ideea_r7o5_locid_sf[1])
+
+ideea_maps[["r7"]] <- list(
+  "land" = 
+    list(
+      "sf" = ideea_r7_sf,
+      "sp" = ideea_r7_sp),
+  "with_offshores" = 
+    list(
+      "sf" = ideea_r7o5_locid_sf,
+      "sp" = ideea_r7o5_locid_sp)
+)
+names(ideea_maps)
+names(ideea_maps$r7$with_offshores)
+
+# 32 regions ####
+(load("data-raw/maps/ideea_r32.RData"))
+plot(ideea_r32_sf[1])
+
+(load("data-raw/maps/ideea_r32o11.RData"))
+plot(ideea_r32o11_sf[1])
+
+(load("data-raw/maps/ideea_r32o11_locid.RData"))
+plot(ideea_r32o11_locid_sf[1])
+
+(load("data-raw/maps/ideea_r32_row.RData"))
+plot(ideea_r32_row_sf[1])
+
+ideea_maps[["r32"]] <- list(
+  "land" = 
+    list(
+      "sf" = ideea_r32_sf,
+      "sp" = ideea_r32_sp),
+  "with_offshores" = 
+    list(
+      "sf" = ideea_r32o11_sf,
+      "sp" = ideea_r32o11_sp),
+    # list(
+    #   "sf" = ideea_32r_off_sf,
+    #   "sp" = ideea_32r_off_sp),
+  "with_ROW" = 
+    list(
+      "sf" = ideea_r32o11_locid_sf,
+      "sp" = ideea_r32o11_locid_sp)
+)
+names(ideea_maps)
+names(ideea_maps$r32$with_offshores)
+
+# 34 regions ####
+(load("data-raw/maps/ideea_r34.RData"))
+plot(ideea_r34_sf[1])
+
+(load("data-raw/maps/ideea_r34o11.RData"))
+plot(ideea_r34o11_sf[1])
+
+(load("data-raw/maps/ideea_r34o12_locid.RData"))
+plot(ideea_r34o12_locid_sf[1])
+
+(load("data-raw/maps/ideea_r34_row.RData"))
+plot(ideea_r34_row_sf[1])
+
+ideea_maps[["r34"]] <- list(
+  "land" = 
+    list(
+      "sf" = ideea_r34_sf,
+      "sp" = ideea_r34_sp),
+  "with_offshores" = 
+    list(
+      "sf" = ideea_r34o11_sf,
+      "sp" = ideea_r34o11_sp),
+  # list(
+  #   "sf" = ideea_34r_off_sf,
+  #   "sp" = ideea_34r_off_sp),
+  "with_ROW" = 
+    list(
+      "sf" = ideea_r34o12_locid_sf,
+      "sp" = ideea_r34o12_locid_sp)
+)
+names(ideea_maps)
+names(ideea_maps$r34$with_offshores)
+
+
+
+# 46 regions and subregions/territories ####
+# (load("data-raw/maps/india_46r_sf.RData"))
+# plot(india_46r_sf[1])
+# ideea_maps[["46r"]] <- list(
+#   "land" = 
+#     list(
+#       "sf" = india_46r_sf)
+# )
+# ROW ####
+(load("data-raw/maps/ideea_row.RData"))
+plot(ideea_row_sf[1])
+ideea_maps[["ROW"]] <- list(
+  "ROW" =
+    list(
+      "sf" = ideea_row_sf,
+      "sp" = ideea_row_sp
+      )
+)
+names(ideea_maps)
+
+# * Saving data file ("sysdata.rda")
+usethis::use_data(ideea_maps, internal = FALSE) # overwrite = T)
+
+```
+
+
+
+*2023-02-17:* 
+Adding *maps* article...
+ToDo: rename maps - from `1r` to `r1` etc. for better accessibility.  
+```{r, eval=FALSE}
+usethis::use_article("maps")
+
+```
+
+
+*2022-03-29:* 
+* **GitHub** private repository <https://github.com/ideea-model/IDEEA.dev> to develop and test the IDEEA model package; the temporary/development name of the package is **IDEEA.dev**.  
+* Creating the package infrastructure using *devtools*. See <https://r-pkgs.org> for details.  
+```{r, eval=FALSE}
+# Do Not Run! This chunk is for reference only.
+# <https://r-pkgs.org/whole-game.html>
+library(devtools)
+packageVersion("devtools")
+?create_package()
+?create_tidy_package()
+create_tidy_package(getwd())
+# dialogue selections:
+# overwrite? ... yes... yes
+
+```
+
+* Create dataset  
+```{r, eval=FALSE}
+# external dataset that will not be included to the package, but used to create data for the package
+## create the folder
+usethis::use_data_raw()
+# maps: 
+## copy/paste (by hand) maps from in IDEEA R-project
+list.files("data-raw/maps")
+#  [1] "ideea_1r.RData"      "ideea_1ri.RData"     "ideea_32r.RData"     "ideea_32r_off.RData"
+#  [5] "ideea_32r_row.RData" "ideea_32r11.RData"   "ideea_34r.RData"     "ideea_34r_off.RData"
+#  [9] "ideea_34r_row.RData" "ideea_34r11.RData"   "ideea_5r.RData"      "ideea_5r_off.RData" 
+# [13] "ideea_5r3.RData"     "ideea_7r.RData"      "ideea_7r_off.RData"  "ideea_7r5.RData"    
+# [17] "ideea_row.RData"     "india_46r_sf.RData" 
+
+# add maps to the package's data
+library(sp)
+library(sf)
+# 1 region ####
+(load("data-raw/maps/ideea_1r.RData"))
+plot(ideea_1r_sf)
+
+load("C:/Users/Sourish/Desktop/git_repository/IDEEA.dev/data-raw/maps/ideea_1ri.RData")
+(load("data-raw/maps/ideea_1ri.RData"))
+plot(ideea_1ri_sf)
+
+ideea_maps <- list(
+  "1r" = list(
+    "mainland" = 
+      list(
+        "sf" = ideea_1r_sf,
+        "sp" = ideea_1r_sp),
+    "with_islands" = 
+      list(
+        "sf" = ideea_1ri_sf,
+        "sp" = ideea_1ri_sp)
+      )
+  )
+# 5 regions ####
+(load("data-raw/maps/ideea_5r.RData"))
+plot(ideea_5r_sf[1])
+
+(load("data-raw/maps/ideea_5r_off.RData"))
+plot(ideea_5r_off_sf[1])
+
+ideea_maps[["5r"]] <- list(
+    "land" = 
+      list(
+        "sf" = ideea_5r_sf,
+        "sp" = ideea_5r_sp),
+    "with_offshores" = 
+      list(
+        "sf" = ideea_5r_off_sf,
+        "sp" = ideea_5r_off_sp)
+      )
+names(ideea_maps)
+names(ideea_maps$`5r`$with_offshores)
+
+# 7 regions ####
+(load("data-raw/maps/ideea_7r.RData"))
+plot(ideea_7r_sf[1])
+
+(load("data-raw/maps/ideea_7r_off.RData"))
+plot(ideea_7r_off_sf[1])
+
+ideea_maps[["7r"]] <- list(
+  "land" = 
+    list(
+      "sf" = ideea_7r_sf,
+      "sp" = ideea_7r_sp),
+  "with_offshores" = 
+    list(
+      "sf" = ideea_7r_off_sf,
+      "sp" = ideea_7r_off_sp)
+)
+names(ideea_maps)
+names(ideea_maps$`7r`$with_offshores)
+
+# 32 regions ####
+(load("data-raw/maps/ideea_32r.RData"))
+plot(ideea_32r_sf[1])
+
+(load("data-raw/maps/ideea_32r11.RData"))
+plot(ideea_32r11_sf[1])
+
+(load("data-raw/maps/ideea_32r_off.RData"))
+plot(ideea_32r_off_sf[1])
+
+(load("data-raw/maps/ideea_32r_row.RData"))
+plot(ideea_32r_row_sf[1])
+
+ideea_maps[["32r"]] <- list(
+  "land" = 
+    list(
+      "sf" = ideea_32r_sf,
+      "sp" = ideea_32r_sp),
+  "with_offshores" = 
+    list(
+      "sf" = ideea_32r11_sf,
+      "sp" = ideea_32r11_sp),
+    # list(
+    #   "sf" = ideea_32r_off_sf,
+    #   "sp" = ideea_32r_off_sp),
+  "with_ROW" = 
+    list(
+      "sf" = ideea_32r_off_sf,
+      "sp" = ideea_32r_off_sp)
+  
+)
+names(ideea_maps)
+names(ideea_maps$`32r`$with_offshores)
+
+# 34 regions ####
+(load("data-raw/maps/ideea_34r.RData"))
+plot(ideea_34r_sf[1])
+
+(load("data-raw/maps/ideea_34r11.RData"))
+plot(ideea_34r11_sf[1])
+
+(load("data-raw/maps/ideea_34r_off.RData"))
+plot(ideea_34r_off_sf[1])
+
+(load("data-raw/maps/ideea_34r_row.RData"))
+plot(ideea_34r_row_sf[1])
+
+ideea_maps[["34r"]] <- list(
+  "land" = 
+    list(
+      "sf" = ideea_34r_sf,
+      "sp" = ideea_34r_sp),
+  "with_offshores" = 
+    list(
+      "sf" = ideea_34r11_sf,
+      "sp" = ideea_34r11_sp),
+  # list(
+  #   "sf" = ideea_34r_off_sf,
+  #   "sp" = ideea_34r_off_sp),
+  "with_ROW" = 
+    list(
+      "sf" = ideea_34r_off_sf,
+      "sp" = ideea_34r_off_sp)
+  
+)
+names(ideea_maps)
+names(ideea_maps$`34r`$with_offshores)
+
+
+
+# 46 regions and subregions/territories ####
+# (load("data-raw/maps/india_46r_sf.RData"))
+# plot(india_46r_sf[1])
+# ideea_maps[["46r"]] <- list(
+#   "land" = 
+#     list(
+#       "sf" = india_46r_sf)
+# )
+# ROW ####
+(load("data-raw/maps/ideea_row.RData"))
+plot(ideea_row_sf[1])
+ideea_maps[["ROW"]] <- list(
+  "ROW" =
+    list(
+      "sf" = ideea_row_sf,
+      "sp" = ideea_row_sp
+      )
+)
+names(ideea_maps)
+
+```
+
+* Saving data file ("sysdata.rda")
+```{r, eval=FALSE}
+usethis::use_data(ideea_maps, internal = FALSE)
+
+
+```
+
+* Dependencies
+```{r, eval=FALSE}
+usethis::use_package("energyRt", "Depends")
+
+
+```
+
+# Vignettes and articles
+## Getting started
+```{r}
+usethis::use_vignette("IDEEA")
+
+usethis::use_article("winddata", "Building wind database")
+
+```
+
+
+## 1-region model
+```{r, eval=FALSE}
+usethis::use_article("ideea-1r")
+
+
+```
+
+
+

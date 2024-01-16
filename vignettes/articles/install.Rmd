@@ -1,0 +1,107 @@
+---
+title: "IDEEA model installation"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+```{r setup, message=FALSE, warning=FALSE, eval=FALSE}
+devtools::install_github("energyRt/energyRt", ref = "dev")
+# library(IDEEA.dev)
+```
+
+## R and RStudio
+
+## RStudio project
+```{r}
+
+
+```
+
+
+## Optimization software options  
+
+### Python
+Version of `Python`, compatible with `Cbc` and `HiGHS` solvers?
+
+Options:
+
+1. Pre-installed `Conda` environment
+```{r}
+
+```
+
+2. Pre-installed Python
+```{python}
+
+```
+
+3. Install Python/Moniconda from R
+## option 1: miniconda 
+```{r}
+library(reticulate)
+install_miniconda()
+miniconda_path()
+conda_list()
+conda_create("switch")
+conda_install("switch", "switch_model", forge = T)
+conda_install("switch", "ggplot", forge = T)
+conda_install("switch", "coincbc", forge = T)
+conda_install("switch", "rpy2", forge = T)
+conda_install("switch", "scipy", forge = T)
+conda_install("switch", "glpk", forge = T)
+conda_install("switch", "highs", forge = T)
+conda_install("switch", "datetime", forge = T)
+conda_install("switch", "time", forge = T)
+conda_install("switch", "itertools", forge = T)
+conda_install("switch", "pandas", forge = T)
+conda_install("switch", "sqlite3", forge = T)
+
+
+use_condaenv("switch")
+?source_python
+source_python("energyRt.py")
+
+```
+
+
+
+### Julia
+
+```{bash, eval=FALSE}
+julia
+println("Julia Version: ", VERSION)
+import Pkg
+Pkg.add("JuMP")
+Pkg.add("HiGHS")
+Pkg.add("Cbc")
+Pkg.add("Clp")
+# Pkg.add("CPLEX") # link to pre-installed CPLEX
+# Pkg.add("Gurobi") # link to pre-installed Gurobi
+Pkg.add("RData")
+Pkg.add("RCall")
+Pkg.add("CodecBzip2")
+Pkg.add("Gadfly")
+Pkg.add("DataFrames")
+Pkg.add("CSV")
+Pkg.add("SQLite")
+Pkg.add("Dates")
+# Pkg.status("JuMP")
+Pkg.status() 
+```
+
+
+### GAMS
+...  
+
+## Datasets 
+(sources to download datasets and where to put them)
+
+## References  

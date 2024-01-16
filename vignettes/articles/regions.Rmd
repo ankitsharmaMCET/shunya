@@ -1,0 +1,411 @@
+---
+title: "IDEEA: regions and maps"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+[THIS DOCUMENT IS A WORK IN PROGRESS]
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  eval = FALSE,
+  comment = "#>"
+)
+```
+GIS connects data to a map, integrating location data (where things are) with all types of descriptive information (what things are like there). In our IDEEA model we use GIS map to transform the geospatial model inputs and outputs into colored patterns or shapes. This provides a foundation to speed up the processing of information, which leads to faster and better-informed decisions. 
+This tutorial will help to create GIS map of India and its sub-region using R based IDEEA.dev package. This geospatial energy analysis tool is instrumental to analyze the renewable energy potential of India and support prospecting, integrated planning, policymaking and decision-making activities to accelerate renewable energy deployment.<br> <br> 
+
+## REGIONS
+India, a union of states, is a Sovereign, Secular, Democratic Republic with a Parliamentary system of Government.According to The States Reorganization Act 1956, the states of India were organized based on linguistic lines.There are 28 states and 8 Union territories in the country. <br> <br>
+In this modelling framework there is a provision to modify the number of sub-regions. Initially GIS map with 46 different regions as given in the following table is used. These 46 regions (r46) are all the states and union territories with some alterations. In 46 region map Daman and Diu are considered as two separate region. Moreover each districts of Puducherry is considered as a separate region. Actually,the Union territory of Puducherry comprises of the erstwhile French colonies viz. Puducherry, Karaikal, Mahe and Yanam. The Puducherry and Karaikal regions are surrounded by the State of Tamilnadu, whereas Mahe is surrounded by the State of Kerala and Yanam by the state of Andra Pradesh. However, in 36 region (r36) map all the different areas of Puducherry (PY.1 - PY.9) are clubbed together as a separate region called Puducherry (PY). Similarly,Daman (DM) and Diu (DU) are merged as a single region Daman and Diu (DD). The following table clearly depicts the administrative area considered under r46, r36, r34,r32,r7 and r5.<br> <br>
+
+```{r, echo=FALSE}
+# load("C:/Users/Sourish/Desktop/git_repository/IDEEA.dev/data-raw/maps/india_r46_sf.RData")
+library(IDEEA.dev)
+india_r46_sf <- IDEEA.dev:::india_r46_sf
+r46 <- india_r46_sf$reg46
+name46 <- india_r46_sf$name46
+r36 <- india_r46_sf$reg36
+name36 <- india_r46_sf$name36
+r34 <- india_r46_sf$reg34
+name34 <- india_r46_sf$name34
+r32 <- india_r46_sf$reg32
+name32 <- india_r46_sf$name32
+r7 <- india_r46_sf$reg7
+name7 <- india_r46_sf$name7
+r5 <- india_r46_sf$reg5
+name5 <- india_r46_sf$name5
+df <- data.frame(r46, name46, r36, name36, r34, name34, r32, name32, r7, name7, r5, name5)
+#df <- data.frame(r36, name36, r34, name34, r7, name7, r5, name5)
+knitr::kable(df, align = "lccrr", format = "html")
+
+```
+
+## STEPS TO CREATE MAP
+
+### Step-1 
+#### Build IDEEA.dev
+
+Build the package (IDEEA.dev) from RStudio: &nbsp; Build/Install and Restart tabs in one of the four sub-screens in RStudio, it appears only for r-package projects. Alternatively, you can install it from a command line
+
+devtools::build()
+
+It will create a source file of the package which can be used for installation of the package from the file (Tools/Install package/… choose the file).
+
+
+### Step-2 
+#### Install the packages a)sp    b)sf   c)tidyverse    d)ggplot2  
+
+The packages can be installed directly from CRAN webpage to the R environment, using the below command.
+
+install.packages(“Package Name”)
+
+Example: For installing sf package:
+
+install.packages(“sf”)
+
+
+### Step-3 
+#### Load/start the installed packages
+
+library(Package Name)
+
+```{r setup, warning=FALSE, message=FALSE}
+library(IDEEA.dev)
+library(sp)
+library(sf)
+library(tidyverse)
+library(ggplot2)
+library(insight)
+library(dplyr)
+library(reticulate)
+```
+
+### Step-4 
+#### Select No of Sub-region, mainland and offshore
+
+Ideea model offers the flexibility to divide the entire administrative area in different no of sub-region.At present user can select among r1 (One region), r5 (five region) , r7(seven region), r32 (32 region)and r34(34 region). Further only mainland or mainland with off-shores can be selected separately for each sub-regional topology.
+
+
+
+### 34-region map without off-shores
+Here each state is considered as a region and a total of 34 regions are considered. Different small areas of Puducherry are merged with surrounding states. Daman and Diu is merged with Gujrat.
+
+
+#### Details of 34 Region 
+
+```{r, table.cap="34 region map without off-shore"}
+r34_land <- ideea_maps$r34$land$sf
+code <- r34_land$reg34
+state <- r34_land$name34
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+#### Plotting 34 Region Map
+
+```{r, fig.cap="34 region map without off-shore"}
+ggplot(ideea_maps$r34$land$sf) +
+  geom_sf(aes(fill = reg34)) +
+  geom_sf_label(aes(label = reg34), check_overlap = T, alpha = .75) +
+  labs(x = "", y = "") +
+  theme_bw()
+ggsave("tmp/ideea_r34.png", device = "png", height = 5, width = 5, scale = 2)
+```
+
+### 34-region map with off-shores
+Here all 34 regions along with off-shores are included. Off-shore regions are mainly included with the coastal states like West Bengal, Kerala, Gujrat etc.
+
+
+#### Details of 34 Region with off-shore
+
+```{r, fig.cap="34 region map with off-shore"}
+r34_land_withoffshore <- ideea_maps$r34$with_offshores$sf
+code <- r34_land_withoffshore$reg34
+state <- r34_land_withoffshore$reg_off
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+
+
+#### Plotting 34 Region Map with offshore
+
+
+```{r, fig.cap="34 region map with off-shore"}
+ggplot(ideea_maps$r34$with_offshores$sf) +
+  geom_sf(aes(fill = reg34)) +
+  theme_bw()
+```
+
+
+### 32-region map without off-shores
+
+#### Details of 32 Region 
+
+```{r, table.cap="32 region map without off-shore"}
+r32_land <- ideea_maps$r32$land$sf
+code <- r32_land$reg32
+state <- r32_land$name32
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+#### Plotting 32 Region Map
+
+```{r, fig.cap="32 region map without off-shore"}
+ggplot(ideea_maps$r32$land$sf) +
+  geom_sf(aes(fill = reg32)) +
+  theme_bw()
+```
+
+### 32-region map with off-shores
+
+#### Details of 32 Region with off-shore
+
+```{r, fig.cap="32 region map with off-shore"}
+r32_land_withoffshore <- ideea_maps$r32$with_offshores$sf
+code <- r32_land_withoffshore$reg32
+state <- r32_land_withoffshore$reg_off
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+#### Plotting 32 Region Map with offshore
+
+
+```{r, fig.cap="32 region map with off-shore"}
+ggplot(ideea_maps$r32$with_offshores$sf) +
+  geom_sf(aes(fill = reg32)) +
+  theme_bw()
+```
+
+
+## 7-region map 
+### 7-region map without off-shores  
+Here Indian mainland is divided into five region and two major islands (Andaman & Nicobar on bay of Bengal and Lakshadwip on Arabian sea) are considered as two separate region.
+
+
+#### Details of 7 Region 
+
+```{r, table.cap="7 region map without off-shore"}
+r7_land <- ideea_maps$r7$land$sf
+code <- r7_land$reg7
+zone <- r7_land$name7
+df <- data.frame(code, zone)
+knitr::kable(df, format = "html")
+```
+
+
+
+#### Plotting 7 Region Map without off-shore
+
+```{r, fig.cap="7 region map without off-shore"}
+ggplot(ideea_maps$r7$land$sf) +
+  geom_sf(aes(fill = reg7)) +
+  theme_bw()
+```
+
+### 7-region map with off-shores
+In the 7 region map off-shores can be observed at eastern, southern and western region. Also off-shores of two islands are included with Andaman and Lakshadwip separately while in five region map these off-shores are included in southern and eastern region.
+
+
+#### Plotting 7 Region Map with offshore
+
+
+```{r, fig.cap="7 region map with off-shore"}
+ggplot(ideea_maps$r7$with_offshores$sf) +
+  geom_sf(aes(fill = reg7)) +
+  theme_bw()
+```
+
+
+
+
+
+## 5-region map 
+### 5-region map without off-shores  
+Looking at the zonal map of India, India is divided into five zones namely North Zone, South Zone, East Zone, West Zone and North East Zone. All these zones include 28 states and 8 union territories. Each zone is comprised of certain number of states and union territories.<br>
+For details of ggplot refer: <br> "https://www.tutorialspoint.com/ggplot2/ggplot2_quick_guide.htm" <br>
+
+
+#### Details of 5 Region 
+
+```{r, table.cap="5 region map without off-shore"}
+r5_land <- ideea_maps$r5$land$sf
+code <- r5_land$reg5
+zone <- r5_land$name5
+df <- data.frame(code, zone)
+knitr::kable(df, format = "html")
+```
+
+
+
+#### Plotting 5 Region Map without off-shore
+
+```{r, fig.cap="5 region map without off-shore"}
+ggplot(ideea_maps$r5$land$sf) +
+  geom_sf(aes(fill = reg5)) +
+  theme_bw()
+```
+
+### 5-region map with off-shores
+Here all five regions along with off-shores are included. Off-shore regions are mainly included in eastern, western and southern region.
+
+
+#### Plotting 5 Region Map with offshore
+
+
+```{r, fig.cap="5 region map with off-shore"}
+ggplot(ideea_maps$r5$with_offshores$sf) +
+  geom_sf(aes(fill = reg5)) +
+  theme_bw()
+```
+
+
+## 1-region map 
+### 1- region map: only mainland 
+
+All the states and union territories (except islands)are considered as a single region.This one is the simplest among all where inter regional trade cannot be considered.
+
+```{r, fig.cap="1 region map: mainland"}
+ideea_maps$r1$mainland$sf %>% plot()
+```
+
+### 1-region map: mainland with islands 
+Here two major islands (Andaman & Nicobar and Lakshadweep) are included with mainland.
+```{r, fig.cap="1 region map: mainland with islands"}
+ideea_maps$r1$with_islands$sf %>% plot()
+```
+
+## 7-region map 
+### 7-region map without off-shores  
+Here Indian mainland is divided into five region and two major islands (Andaman & Nicobar on bay of Bengal and Lakshadwip on Arabian sea) are considered as two separate region.
+
+
+#### Details of 7 Region 
+
+```{r, table.cap="7 region map without off-shore"}
+r7_land <- ideea_maps$r7$land$sf
+code <- r7_land$reg7
+zone <- r7_land$name7
+df <- data.frame(code, zone)
+knitr::kable(df, format = "html")
+```
+
+
+
+#### Plotting 7 Region Map without off-shore
+
+```{r, fig.cap="7 region map without off-shore"}
+ggplot(ideea_maps$r7$land$sf) +
+  geom_sf(aes(fill = reg7)) +
+  theme_bw()
+```
+
+### 7-region map with off-shores
+In the 7 region map off-shores can be observed at eastern, southern and western region. Also off-shores of two islands are included with Andaman and Lakshadwip separately while in five region map these off-shores are included in southern and eastern region.
+
+
+#### Plotting 7 Region Map with offshore
+
+
+```{r, fig.cap="7 region map with off-shore"}
+ggplot(ideea_maps$r7$with_offshores$sf) +
+  geom_sf(aes(fill = reg7)) +
+  theme_bw()
+```
+
+
+
+
+### 34-region map without off-shores
+Here each state is considered as a region and a total of 34 regions are considered.
+
+
+#### Details of 34 Region 
+
+```{r, table.cap="34 region map without off-shore"}
+r34_land <- ideea_maps$r34$land$sf
+code <- r34_land$reg34
+state <- r34_land$name34
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+#### Plotting 34 Region Map
+
+```{r, fig.cap="34 region map without off-shore"}
+ggplot(ideea_maps$r34$land$sf) +
+  geom_sf(aes(fill = reg34)) +
+  theme_bw()
+```
+
+### 34-region map with off-shores
+Here all 34 regions along with off-shores are included. Off-shore regions are mainly included with the coastal states like West Bengal, Kerala, Gujrat etc.
+
+
+#### Details of 34 Region with off-shore
+
+```{r, fig.cap="34 region map with off-shore"}
+r34_land_withoffshore <- ideea_maps$r34$with_offshores$sf
+code <- r34_land_withoffshore$reg34
+state <- r34_land_withoffshore$reg_off
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+
+
+
+#### Plotting 34 Region Map with offshore
+
+
+```{r, fig.cap="34 region map with off-shore"}
+ggplot(ideea_maps$r34$with_offshores$sf) +
+  geom_sf(aes(fill = reg34)) +
+  theme_bw()
+```
+
+### 32-region map without off-shores
+
+#### Details of 32 Region 
+
+```{r, table.cap="32 region map without off-shore"}
+r32_land <- ideea_maps$r32$land$sf
+code <- r32_land$reg32
+state <- r32_land$name32
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+#### Plotting 32 Region Map
+
+```{r, fig.cap="32 region map without off-shore"}
+ggplot(ideea_maps$r32$land$sf) +
+  geom_sf(aes(fill = reg32)) +
+  theme_bw()
+```
+
+### 32-region map with off-shores
+
+#### Details of 32 Region with off-shore
+
+```{r, fig.cap="32 region map with off-shore"}
+r32_land_withoffshore <- ideea_maps$r32$with_offshores$sf
+code <- r32_land_withoffshore$reg32
+state <- r32_land_withoffshore$reg_off
+df <- data.frame(code, state)
+knitr::kable(df, format = "html")
+```
+
+#### Plotting 32 Region Map with offshore
+
+
+```{r, fig.cap="32 region map with off-shore"}
+ggplot(ideea_maps$r32$with_offshores$sf) +
+  geom_sf(aes(fill = reg32)) +
+  theme_bw()
+```

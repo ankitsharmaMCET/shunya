@@ -1,0 +1,501 @@
+---
+title: "Primary energy sources"
+fig_caption: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  # echo = T,
+  comment = "#>"
+)
+```
+
+India is the third largest energy consumer in the world after China and USA. It is also the fastest growing energy consumer. With a share of 5.7% of the World's primary energy consumption, India's energy requirement is fulfilled primarily by Coal, Crude Oil, Natural Gas and Renewable Energy.
+
+Primary energy sources include fossil fuels, nuclear energy, and renewable sources of energy. This document describes primary energy supply module and the used data, both embedded in the IDEEA library. The generation capacity of electricity, as the secondary energy source, is described in the `Electricity` module.
+
+**Units convention**\
+In this manual we use conventional units for every energy type to represent on figures and some tables. However, for modeling reason units of materials, capacity and energy are normally standardized. Depending on scale and geography of a study, different energy macro-models use different base energy units including joules (PJ, GJ, MJ), British Thermal Units (MMBtu), or watt-hours (MWh, GWh, TWh). Since the primary goal of IDEEA is an evaluation of energy transition with consideration of electricity and renewable energy as the key energy carrier, it is natural to use electric energy units for all energy carriers in the model. Other energy units can be used if decided, though all the data in the library is saved in the following units:
+
+-   **GWh** - energy data, all energy carriers
+-   **t**, **kt**, **Mt** - physical quantities of commodities (emissions, fossil fuels raw data, also capacity of industrial processes in developing modules)
+-   **GW** - electric capacity\
+-   **INR (in cr.)** - currency units in the model;\
+    **note**: The exchange rate **INR/USD** and **USD/EUR** is fixed to the approximate level in July 2023 (use `convert("cr.INR/GWh", "INR/kWh", 1)` for units conversion.
+
+Modeled units information is saved in every model object (commodities, technologies, etc.) for reference.
+
+## Coal and Lignite
+
+India has the fifth largest proven coal reserves in the world. As of April,'2022 exploration carried out up to the maximum depth of 1200m by GSI, CMPDI, SCCL, MECL etc., a cumulative total estimated coal reserve of the country as per coal Inventory published by GSI is 361411.46 million tonnes (361.41 billion tonnes)[1]. The total reserves of coal rose 2.36% over the previous year with the discovery of an estimated 9.28 billion metric tons. About 51.7% of the total coal reserves are measured/proven, 40.7% are indicated/probable, and 7.48% are inferred[1]. Coal deposits are primarily found in eastern and south-central India. Jharkhand, Odisha and Chhattisgarh accounted for 68.88% of India's total known coal reserves.
+
+The estimated total reserves of lignite coal in India as of 1 April 2021 were 46.02 billion metric tons (50.73 billion short tons), remaining unchanged from the previous year. The largest lignite reserves are present in Tamil Nadu. Only about 16% of India's lignite reserves are proven, 56% are indicated/probable, and 28% are inferred. The production of lignite was 36.61 million metric tons (40.36 million short tons) in 2020--21, a decrease of 13.04% over the previous fiscal. Production of lignite declined by a CAGR of 1.60% over the last 10 years. Consumption of lignite stood at 37.22 million metric tons (0.04103 billion short tons) in 2020--21. Electricity generation alone accounts for 84.46% of the total lignite consumption. Other significant consumers include the paper industry (5.55%), the cement industry (2.18%) and the textile industry (2.01%). Lignite consumption declined at a compound annual growth rate of 1.30% over the previous decade. Lignite is accounted for 3.6% of electricity generation in 2020-21 [1]. Ministry of Coal has decided to develop National Lignite Index to facilitate auction of lignite mines on revenue share basis. The concept of base prices for lignite is similar to the National Coal Index and it is developed by Indian Statistical Institute, Kolkata [2]. **???Should we model lignite independently???**
+
+<details>
+<summary>code</summary>
+```{r setup, message=FALSE, warning=FALSE}
+library(IDEEA.dev)
+# library(IDEEA)
+# library(sf)
+library(tidyverse)
+library(data.table)
+library(cowplot)
+library(ggthemes)
+
+# load IDEEA map
+gis_sf <- get_ideea_map(nreg = 36, rename = F)
+
+# create repository for energy-sector objects
+repo_energy <- newRepository(
+  name = "repo_energy",
+  desc = "Primary energy supply"
+)
+
+```
+
+Definition of commodity and supply
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+# definition of commodity
+COA <- newCommodity(
+  name = "COA", 
+  desc = "Coal, all types",
+  unit = "GWh", 
+  #slice = "ANNUAL",
+  timeframe = "ANNUAL",
+  emis = data.frame(
+    comm = "CO2",
+    unit = "kt/GWh",
+    emis = 0.33 # emissions from combustion of 1 unit
+  ),
+  misc = list(
+    emis_source = "https://www.eia.gov/environment/emissions/co2_vol_mass.php",
+    emis_conv = 'convert("kg/MMBtu", "kt/GWh", 96)'
+  )
+)
+
+# loading and processing coal data
+coa_reserve <- get_ideea_data(name = "coal", nreg = 7, variable = "reserve")
+coa_sup <- 
+  get_ideea_data("coal", nreg = 7, "production") %>%
+  full_join(
+    get_ideea_data("coal", nreg = 7, "cost.+2020", agg_fun = mean)
+  )
+
+# define domestic supply of coal
+SUP_COA <- newSupply(
+  name = "SUP_COA",
+  desc = "Domestic coal supply, all grades",
+  commodity = "COA",
+  unit = "GWh",
+  reserve = data.frame( # maximum 
+    region = coa_reserve$reg7,
+    res.up = round(convert("Mtce", "GWh", coa_reserve$total_reserve_Mt * .7))
+  ),
+  availability = data.frame(
+    region = coa_sup$reg7,
+    ava.up = round(convert("Mtce", "GWh", coa_sup$production_2021 * .7), 0),
+    cost = signif(convert("USD/tce", "cr.INR/GWh", 
+                          coa_sup$cost_USD_t_2020 * .7), 3)
+  )
+)
+
+# import from other countries, makes supply of coal available in any region
+IMP_COA <- newImport(
+  name = "IMP_COA",
+  desc = "Import of coal from abroad",
+  commodity = "COA",
+  unit = "GWh",
+  imp = data.frame(
+    # region = NA, # all regions
+    price = 2 * mean(SUP_COA@availability$cost, na.rm = T) # assuming double costs
+  )
+)
+
+# saving the model objects in repository
+repo_energy <- add(repo_energy, COA, SUP_COA, IMP_COA)
+
+```
+</details>
+
+
+```{r fig.coa, fig.cap="Total coal reserves and production in 2021 by state", echo=FALSE, fig.width=8, fig.height=4, message=FALSE, warning=FALSE}
+
+coal_sf <- gis_sf %>% 
+  left_join(ideea_data$coal)
+  
+fig.coal.reserves <- ggplot(coal_sf) +
+  geom_sf(aes(fill = total_reserve_Mt/1e3)) +
+  scale_fill_viridis_c(option = "H", name = "Gt") +
+  theme_map()
+
+fig.coal.production <- 
+  ggplot(coal_sf) +
+  geom_sf(aes(fill = production_2021)) +
+  scale_fill_viridis_c(option = "E", name = "Mt") +
+  theme_map()
+
+cowplot::plot_grid(fig.coal.reserves, fig.coal.production, ncol = 2,
+                   labels = c("Reserves", "Production"))
+```
+
+## Oil
+
+Oil and gas within the energy mix play an important role as over one third of the energy required is met by hydrocarbons. Growing economy and population growth are the main drivers for oil & gas demand increasing every year.\
+Crude Oil Production during the year 2020-21 is at 30.49 MMT. Import of Crude Oil was 196.46 MMT worth Rs 459779 Crores, Petroleum Products was 43.25 MMT valued at Rs. 109430 crores and LNG was 24.8 MMT valued at Rs. 54850 crores, combinedly worth 21.4% of the country's overall imports in 2020-21. The export of Petroleum products was 56.77 MMT valued at Rs. 157168 crores in 2020-21.
+
+<details>
+<summary>code</summary>
+```{r oil_data, message=FALSE}
+# loading and processing oil data
+# get_ideea_data(name = "oil", raw = T) # check
+oil_reserve <- get_ideea_data(name = "oil", nreg = 7, variable = "reserve")
+oil_sup <- 
+  oil_reserve %>%
+  full_join(
+    get_ideea_data("oil", nreg = 7, "cost", agg_fun = mean)
+  ) %>%
+  filter(oil_reserve_Mt_2021 > 0)
+
+```
+
+```{r oil_sup}
+# Declaration of commodity
+OIL <- newCommodity(
+  name = "OIL", 
+  desc = "Oil and products",
+  unit = "GWh", 
+  #slice = "ANNUAL",
+  timeframe = "ANNUAL",
+  emis = data.frame(
+    comm = "CO2",
+    unit = "kt/GWh",
+    emis = 0.25 # emissions from combustion of 1 unit
+  ),
+  misc = list(
+    emis_source = "https://www.eia.gov/environment/emissions/co2_vol_mass.php",
+    emis_conv = 'convert("kg/MMBtu", "kt/GWh", 74)'
+  )
+)
+
+# Declaration of domestic supply
+SUP_OIL <- newSupply(
+  name = "SUP_OIL",
+  desc = "Domestic oil supply",
+  commodity = "OIL",
+  unit = "GWh",
+  region = oil_sup$reg7,
+  reserve = data.frame(
+    region = oil_sup$reg7,
+    res.up = oil_sup$oil_reserve_GWh_2021
+  ),
+  availability = data.frame(
+    region = oil_sup$reg7,
+    ava.up = oil_sup$oil_reserve_GWh_2021 / 30, # assumption
+    cost = convert("USD/kWh", "cr.INR/GWh", oil_sup$oil_cost_USD_kWh)
+  )
+)
+
+# Declaration of import from other countries, 
+# makes supply of oil available in any region
+IMP_OIL <- newImport(
+  name = "IMP_OIL",
+  desc = "Import of oil from abroad",
+  commodity = "OIL",
+  unit = "GWh",
+  imp = data.frame(
+    # region = NA, # all regions
+    price = 2 * mean(SUP_OIL@availability$cost, na.rm = T) # assuming double costs
+  )
+)
+
+# saving the model objects in repository
+repo_energy <- add(repo_energy, OIL, SUP_OIL, IMP_OIL)
+repo_energy@data %>% names()
+
+```
+</details>
+
+```{r fig.oil, fig.cap="Total oil reserves by region", echo=FALSE, fig.width=8, fig.height=4, message=FALSE, warning=FALSE}
+
+oil_sf <- get_ideea_map(nreg = 7, rename = F, islands = T) %>% 
+  left_join(oil_sup)
+
+fig.oil.reserves <- ggplot(oil_sf) +
+  geom_sf(aes(fill = oil_reserve_Mt_2021)) +
+  scale_fill_viridis_c(option = "H", name = "Mt") +
+  theme_map()
+
+# import data for 36 regions, for figures
+oil_reserve_r36 <- get_ideea_data(name = "oil", nreg = 36, variable = "reserve")
+oil_sup_r36 <- 
+  oil_reserve_r36 %>%
+  full_join(
+    get_ideea_data("oil", nreg = 36, "cost", agg_fun = mean)
+  ) %>%
+  filter(oil_reserve_Mt_2021 > 0)
+
+oil_r36_sf <- get_ideea_map(nreg = 36, rename = F) %>% 
+  left_join(oil_sup_r36)
+  
+fig.oil.reserves.r36 <- ggplot(oil_r36_sf) +
+  geom_sf(aes(fill = oil_reserve_Mt_2021)) +
+  scale_fill_viridis_c(option = "H", name = "Mt") +
+  theme_map()
+
+cowplot::plot_grid(fig.oil.reserves.r36, fig.oil.reserves, ncol = 2,
+                   labels = c("36 regions", "7 regions"))
+```
+
+## Gas
+
+Government of India is determined to promote usage of natural gas, as a fuel and feedstock across the country, and to increase its share in primary energy mix from around 6.7% to 15% by 2030 [1]. The estimated CBM resources are of the order of 2600 BCM or 91 Trillion TCF spread over 11 states of the country. Natural Gas Production during 2020-21 stood at 28.67 BCM. Currently, 2575 sq. kms of CBM resources are available in India. Out of 280.357 BCM of CBM, 112.63 BCM of CBM are recoverable reserves [2].
+
+<details>
+<summary>code</summary>
+```{r gas_sup, message=FALSE}
+# loading and processing oil data
+get_ideea_data(name = "gas", raw = T) # check raw data
+gas_reserve <- get_ideea_data(name = "gas", nreg = 7, variable = "reserve")
+gas_sup <- 
+  # get_ideea_data("oil", nreg = 7, "production") %>%
+  gas_reserve %>%
+  full_join(
+    get_ideea_data("gas", nreg = 7, variable = "cost", agg_fun = mean)
+  ) %>%
+  filter(gas_reserve_Bcm_2021 > 0)
+
+# Declaration of commodity
+GAS <- newCommodity(
+  name = "GAS", 
+  desc = "Natural gas, all types",
+  unit = "GWh", 
+  #slice = "ANNUAL", deprecated
+  timeframe = "ANNUAL",
+  emis = data.frame(
+    comm = "CO2",
+    unit = "kt/GWh",
+    emis = 0.18 # emissions from combustion of 1 unit 
+  ),
+  misc = list(
+    emis_source = "https://www.eia.gov/environment/emissions/co2_vol_mass.php",
+    emis_conv = 'convert("kg/MMBtu", "kt/GWh", 53)'
+  )
+)
+
+# Declaration of domestic supply
+SUP_GAS <- newSupply(
+  name = "SUP_GAS",
+  desc = "Domestic natural supply",
+  commodity = "GAS",
+  unit = "GWh",
+  region = gas_sup$reg7,
+  reserve = data.frame(
+    region = gas_sup$reg7,
+    res.up = gas_sup$gas_reserve_GWh_2021 
+  ),
+  availability = data.frame(
+    region = gas_sup$reg7,
+   #ava.up = gas_sup$gas_reserve_GWh_2021 / 30, # assumption
+    ava.up = 0,
+    cost = convert("USD/kWh", "cr.INR/GWh", gas_sup$gas_cost_USD_kWh)
+  )
+)
+
+# Declaration of import from other countries,
+# (makes supply of oil available in any region)
+IMP_GAS <- newImport(
+  name = "IMP_GAS",
+  desc = "Import of natural gas from abroad",
+  commodity = "GAS",
+  unit = "GWh",
+  imp = data.frame(
+    # region = NA, # all regions
+    #price = 2 * mean(SUP_GAS@availability$cost, na.rm = T) # assuming double costs
+    price = 100 * mean(SUP_GAS@availability$cost, na.rm = T) # assuming high costs
+  )
+)
+
+# saving the model objects in repository
+repo_energy <- add(repo_energy, GAS, SUP_GAS, IMP_GAS, overwrite = F)
+repo_energy@data %>% names()
+```
+</details>
+
+```{r fig.gas, fig.cap="Total gas reserves by region", echo=FALSE, fig.width=8, fig.height=4, message=FALSE, warning=FALSE}
+gas_sf <- get_ideea_map(nreg = 7, rename = F, islands = T) %>% 
+  left_join(gas_sup)
+
+fig.gas.reserves <- ggplot(gas_sf) +
+  geom_sf(aes(fill = gas_reserve_Bcm_2021)) +
+  scale_fill_viridis_c(option = "H", name = "Bcm") +
+  theme_map()
+
+# import data for 36 regions, for figures
+gas_reserve_r36 <- get_ideea_data(name = "gas", nreg = 36, variable = "reserve")
+gas_sup_r36 <- 
+  gas_reserve_r36 %>%
+  full_join(
+    get_ideea_data("gas", nreg = 36, "cost", agg_fun = mean)
+  ) %>%
+  filter(gas_reserve_Bcm_2021 > 0)
+
+gas_r36_sf <- get_ideea_map(nreg = 36, rename = F) %>% 
+  left_join(gas_sup_r36)
+
+fig.gas.reserves.r36 <- ggplot(gas_r36_sf) +
+  geom_sf(aes(fill = gas_reserve_Bcm_2021)) +
+  scale_fill_viridis_c(option = "H", name = "Bcm") +
+  theme_map()
+
+cowplot::plot_grid(fig.gas.reserves.r36, fig.gas.reserves, ncol = 2,
+                   labels = c("36 regions", "7 regions"))
+```
+
+## Bio
+In reference with Centre for Energy Studies Report (<https://mnre.gov.in/img/documents/uploads/file_s-> 1685625362098.pdf)) entitled "Evaluation Study for Assessment of Biomass Power and Bagasse Cogeneration Potential in The Country", the total gross cropped area (TE-2015-2018) brought under selected crops in India was around 198.11 m.ha, which includes the Kharif, rabi and summer seasons acreage and annual crops. Total production produced from these selected crops at all India level for the selected period was around 774.38 million tonnes. From this total production, total biomass potential have been derived by multiplying the crop-specific Crop Residue Ratio (CRR) with the total production of the respective crops. The calculated total available biomass potential at all India level was reported to around 754.50 million tonnes. Out of this total biomass production, a specific portion of the biomass is used for domestic uses such as domestic fuel, feed for cattle and manure etc.; the utilization rate of biomass varied from crop to crop and state to state.
+
+It has been found that 2/3rd portion of total biomass produced, i.e., 525.98 million tonnes, are utilized for domestic uses and for consumption, whereas the remaining 1/3rd portion has resulted in surplus biomass, i.e., 228.52 million tonnes. From this, biomass power potential is derived by multiplying the crop-specific power factor (derived from the Gross Heating Value) to the surplus biomass of the respective crop surplus biomass. The estimated gross biomass power potential (TE-2015-2018) is around 28445.52 MWe at all India level. The lions share of all India biomass power potential is contributed by Punjab (10.6%), Uttar Pradesh (9.8%), followed by Gujarat (9.3%), Maharashtra (9.2%), Madhya Pradesh (8.8%) and Andhra Pradesh (7%).
+
+The estimation of biomass power potential in 2019-20 has been calculated on the basis of arrived power potential and trends in 2015-18. The major contributing states to the biomass power potential are Punjab, Uttar Pradesh, Gujarat, Maharashtra, Madhya Pradesh, Andhra Pradesh, Karnataka, West Bengal, Telangana, and Tamil Nadu, whereas the least potential states and Union Territories are Goa, Tripura, Arunachal Pradesh. The projected biomass power potential at all India level based on the time series analysis (trend component) is expected to increase to 30883.21 MWe, 32937.83 MWe, 35994.52 MWe by the Year 2020-21, 2025-26 and 2030-31, respectively. The increase in biomass power potential may be contributed by increased area and production under different crops or by a change in cropping pattern, utilization of the residual biomass at farm level.
+
+<details>
+<summary>code</summary>
+```{r bio_sup, message=FALSE}
+# loading and processing data
+# get_ideea_data(name = "biomass", raw = T) # check raw data
+bio_sup <- get_ideea_data(name = "biomass", nreg = 7, variable = "max_MWe") %>%
+  filter(max_MWe > 0)
+
+# Declaration of commodity
+BIO <- newCommodity(
+  name = "BIO", 
+  desc = "Biomass, all types",
+  unit = "GWh", 
+  #slice = "ANNUAL"  deprecated
+  timeframe = "ANNUAL"
+  # emis = data.frame(
+  #   comm = "PM25",
+  #   unit = "kt/GWh",
+  #   emis = 0.1
+  # )
+)
+
+# Declaration of domestic supply
+RES_BIO <- newSupply(
+  name = "RES_BIO",
+  desc = "Local biomass resource",
+  commodity = "BIO",
+  unit = "GWh",
+  availability = data.frame(
+    region = bio_sup$reg7,
+    ava.up = bio_sup$max_MWe * 8760 * .5 / .35, # assuming 50% load & 35% efficiency
+    cost = .01 # cr.INR/GWh
+  )
+)
+
+# saving the model objects in repository
+repo_energy <- add(repo_energy, BIO, RES_BIO)
+repo_energy@data %>% names()
+```
+</details>
+
+```{r fig.bio, fig.cap="Total bio reserves by region", echo=FALSE, fig.width=8, fig.height=4, message=FALSE, warning=FALSE}
+bio_sf <- get_ideea_map(nreg = 7, rename = F, islands = T) %>% 
+  left_join(bio_sup)
+
+fig.bio.resource <- ggplot(bio_sf) +
+  geom_sf(aes(fill = max_MWe/1e3)) +
+  scale_fill_viridis_c(option = "H", name = "GWe") +
+  theme_map()
+
+# import data for 36 regions, for figures
+bio_sup_r36 <- get_ideea_data(name = "biomass", nreg = 36, variable = "max_MWe")
+
+bio_r36_sf <- get_ideea_map(nreg = 36, rename = F) %>% 
+  left_join(bio_sup_r36)
+
+fig.bio.resource.r36 <- ggplot(bio_r36_sf) +
+  geom_sf(aes(fill = max_MWe/1e3)) +
+  scale_fill_viridis_c(option = "H", name = "GWe") +
+  theme_map()
+
+cowplot::plot_grid(fig.bio.resource.r36, fig.bio.resource, ncol = 2,
+                   labels = c("36 regions", "7 regions"))
+```
+
+
+## Wind
+
+As per National Institute of Wind Energy (NIWE), installable wind potential in India at 50 m, 80m, 100 m and 120m above the ground level are 49130 MW, 102788 MW and 302251 MW respectively [2, 3]. The commercially exploitable wind potential is more than 200 GW. Currently, total installed capacity of wind in India is around 41 GW i.e., 20% of the total commercially exploitable potential [4]. Tamil Nādu, Gujarat, Karnataka, Rajasthan & Maharashtra are the top 5 wind energy potential states [5]. India is also blessed with 7600 km of coast line and estimated off-shore wind potential is around 194 GW. Coastal area of Gujarat and coastline of Rameshwaram and Kanyakumari offer offshore wind potential which is almost around 71GW [6, 7]. The wind speed is available at the above-mentioned coastal areas is around 7 m/s -- 9m/s [8]. The capital cost of investment required for 1 MW of wind power plant installation is around 5 -- 5.5 Crores and the levelized cost of generation is around INR 2-3. [9].
+
+```{r}
+
+
+```
+
+## Solar
+Solar power Generation in India is 67 GW[6] which accounts for 16% of the total power generation in India. In the Financial Year of 2022-23, a total of 102 Billion Units[7] of Solar power was generated. The total potential for solar power in India is estimated to be 748GW. However any estimates of solar power are based on used land assumptions and the current state of the technology. With 
+
+The National Solar Mission was launched in 2010 to promote ecological sustainable growth while addressing India’s energy security challenges. It will also constitute a major contribution by India to the global effort to meet the challenges of climate change. The Mission’s objective is to establish India as a global leader in solar energy by creating the policy conditions for solar technology diffusion across the country as quickly as possible.[11] The policy had a target of 100 GW installed capacity of Solar power in India by 2022, but has achieved installed capacity of 62GW in 2022. It is estimated that by 2026, 100 GW of solar power will be installed and India can become a net exporter of Solar power[12].
+
+
+```{r}
+
+```
+
+## Hydro
+
+In India, hydroelectric plants are categorised as large hydro (\>25MW) and small hydro (≤25MW). Government authorities conduct periodic studies on estimating the potential of large hydro plants. Data on large hydro potential, capacity in operation and capacity under construction till March 2023 have been collated from [<https://pib.gov.in/PressReleasePage.aspx?PRID=1909276>] and installed capacity of small hydro plants till June 2023 have been obtained from [<https://mnre.gov.in/img/documents/uploads/file_s-1689077131891.pdf>]. Construction of hydro projects typically involve long construction periods due to sites being prone to geological surprises. This makes it difficult to determine a unified levelized price and it varies from project to project. However, for the large hydro projects installed in the last few years, the average price has been observed to work out as INR 5.42 per kWh [<https://energy.economictimes.indiatimes.com/news/power/reviving-indias-sleeping-energy-giant-hydro-pumped-hydro-power/97294420>]
+
+## Nuclear
+summarize existing and planned projects  
+normally not included to optimization  
+<https://www.world-nuclear.org/information-library/country-profiles/countries-g-n/india.aspx>
+```{r}
+# Declaration of commodity
+NUC <- newCommodity(
+  name = "NUC", 
+  desc = "Nuclear fuel",
+  unit = "GWh", 
+  #slice = "ANNUAL" deprecated
+  timeframe = "ANNUAL"
+)
+
+IMP_NUC <- newImport(
+  name = "IMP_NUC",
+  desc = "Import of nuclear fuel",
+  commodity = "NUC",
+  unit = "GWh",
+  imp = data.frame(
+    # region = NA, # all regions
+    price = convert("cents/kWh", "cr.INR/GWh", 0.46 * .35) 
+    # price adjusted for 35% efficiency
+  ),
+  misc = list(
+    source = "https://world-nuclear.org/information-library/economic-aspects/economics-of-nuclear-power.aspx",
+    cost = "fuel cost = 0.46 ¢/kWh"
+  )
+)
+
+# saving the model objects in repository
+repo_energy <- add(repo_energy, NUC, IMP_NUC, overwrite = F)
+repo_energy@data %>% names()
+
+
+
+```
+
+
+
+
+```{r, eval=FALSE, include=FALSE}
+# manually save to "raw" data, will be included to the IDEEA package 
+# after re-running `data-raw/dataset.R`
+names(repo_energy@data)
+save(repo_energy, file = "data-raw/repo_energy.RData")
+
+```

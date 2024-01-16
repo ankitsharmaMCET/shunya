@@ -1,0 +1,213 @@
+---
+title: "maps"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+<p style="color:Blue">
+<b>
+Step-1 <br>
+Build IDEEA.dev
+</b>
+</p>
+How to build IDEEA.dev?
+
+Build the package (IDEEA.dev) from RStudio: &nbsp; Build/Install and Restart tabs in one of the four sub-screens in RStudio, it appears only for r-package projects. Alternatively, you can install it from a command line
+
+devtools::build()
+
+It will create a source file of the package which can be used for installation of the package from the file (Tools/Install package/… choose the file).
+
+<p style="color:Blue">
+<b>
+Step-2 <br>
+Install the packages a)sp &nbsp; &nbsp;   b)sf  &nbsp; &nbsp; c)tidyverse &nbsp; &nbsp;   d)ggplot2 &nbsp; &nbsp;
+</b>
+</p>
+
+
+
+
+How to Install R packages directly from the CRAN directory?
+The packages can be installed directly from CRAN webpage to the R environment, using the below command.
+
+install.packages(“Package Name”)
+
+Example: For installing sf package:
+
+install.packages(“sf”)
+
+<p style="color:Blue">
+<b>
+Step-3 <br>
+Load/start the installed packages
+</b>
+</p>
+
+library(Package Name)
+
+
+
+
+
+```{r setup, warning=FALSE, message=FALSE}
+library(IDEEA.dev)
+library(sp)
+library(sf)
+library(IDEEA.dev)
+library(tidyverse)
+library(ggplot2)
+library(insight)
+```
+
+<p style="color:Blue">
+<b>
+Step-4 <br>
+Select No of Sub-region, mainland and offshore
+</b>
+</p>
+<p style="color:Green">
+Ideea model offers the flexibility to divide the entire administrative area in different no of sub-region.At present user can select among r1 (One region), r5 (five region) , r7(seven region), r32 (32 region)and r34(34 region). Further only mainland or mainland with off-shores can be selected separately for each sub-regional topology.
+</p>
+## 1-region map only mainland 
+All the states and union territories (except islands)are considered as a single region.This one is the simplest among all where inter regional trade cannot be considered.
+```{r, fig.cap="1 region map: mainland"}
+ideea_maps$r1$mainland$sf %>% plot()
+
+```
+
+## 1-region map: mainland with islands 
+Here two major islands (Andaman & Nicobar and Lakshadweep) are included with mainland.
+```{r, fig.cap="1 region map: mainland with islands"}
+ideea_maps$r1$with_islands$sf %>% plot()
+
+```
+
+## 5-region map without off-shores  
+Looking at the zonal map of India, India is divided into five zones namely North Zone, South Zone, East Zone, West Zone and North East Zone. All these zones include 28 states and 8 union territories. Each zone is comprised of certain number of states and union territories.<br>
+For details of ggplot refer: <br> "https://www.tutorialspoint.com/ggplot2/ggplot2_quick_guide.htm" <br>
+<p style="color:Green">
+5 Region Details
+</p>
+```{r, table.cap="5 region map without off-shore"}
+r5_land<-ideea_maps$r5$land$sf
+code<-r5_land$reg5
+zone<-r5_land$name5
+df<-data.frame(code,zone)
+knitr::kable(df, format = "html")
+```
+<br> <br>
+
+<p style="color:Green">
+Plotting 5 Region Map
+</p>
+```{r, fig.cap="5 region map without off-shore"}
+ggplot(ideea_maps$r5$land$sf) +
+  geom_sf(aes(fill = reg5)) +
+  theme_bw()
+```
+## 5-region map with off-shores
+Here all five regions along with off-shores are included. Off-shore regions are mainly included in eastern, western and southern region.
+
+<p style="color:Green">
+5 Region with off-shore: Details
+</p>
+```{r, fig.cap="5 region map with off-shore"}
+r5_land_withoffshore<-ideea_maps$r5$with_offshores$sf
+code<-r5_land_withoffshore$reg5
+region<-r5_land_withoffshore$reg_off
+locid<-r5_land_withoffshore$locid
+df<-data.frame(code,region,locid)
+knitr::kable(df, format = "html")
+```
+
+<br> <br>
+
+<p style="color:Green">
+Plotting 5 Region Map with offshore
+</p>
+
+```{r, fig.cap="5 region map with off-shore"}
+ggplot(ideea_maps$r5$with_offshores$sf) +
+  geom_sf(aes(fill = reg5)) +
+  theme_bw()
+```
+
+
+## 34-region map without off-shores
+Here each state is considered as a region and a total of 34 regions are considered.
+
+<p style="color:Green">
+34 Region Details
+</p>
+```{r, table.cap="34 region map without off-shore"}
+r34_land<-ideea_maps$r34$land$sf
+code<-r34_land$reg34
+state<-r34_land$name34
+df<-data.frame(code,state)
+knitr::kable(df, format = "html")
+```
+<br> <br>
+
+<p style="color:Green">
+Plotting 34 Region Map
+</p>
+
+
+```{r, fig.cap="34 region map without off-shore"}
+
+ggplot(ideea_maps$r34$land$sf) +
+  geom_sf(aes(fill = reg34)) +
+  theme_bw()
+```
+
+## 34-region map with off-shores
+Here all 34 regions along with off-shores are included. Off-shore regions are mainly included with the coastal states like West Bengal, Kerala, Gujrat etc.
+
+<p style="color:Green">
+34 Region with off-shore: Details
+</p>
+```{r, fig.cap="34 region map with off-shore"}
+r34_land_withoffshore<-ideea_maps$r34$with_offshores$sf
+code<-r34_land_withoffshore$reg34
+state<-r34_land_withoffshore$reg_off
+df<-data.frame(code,state)
+knitr::kable(df, format = "html")
+```
+
+<br> <br>
+
+<p style="color:Green">
+Plotting 34 Region Map with offshore
+</p>
+
+```{r, fig.cap="34 region map with off-shore"}
+
+ggplot(ideea_maps$r34$with_offshores$sf) +
+  geom_sf(aes(fill = reg34)) +
+  theme_bw()
+```
+
+<p style="color:Red">
+NOTE: In a similar way 7 region and 32 region map can be created
+</p>
+
+## Will be deleted
+```{r, fig.cap="5 region map"}
+# ideea_maps
+# class(ideea_maps)
+# names(ideea_maps)
+# ideea_maps[["1r"]]$mainland$sf %>% plot()
+# ideea_maps[["1r"]]$mainland$sf
+# ideea_maps$`5r`$with_offshores$sf %>% plot()
+# ideea_maps$`5r`$with_offshores$sf 
+
+```
